@@ -147,7 +147,7 @@ export default function App() {
         <div style={c.hdr}>
           <div>
             <div style={{ fontSize:17, fontWeight:600 }}>현장 일일 업무일지</div>
-            <div style={{ fontSize:12, opacity:.85, marginTop:2 }}>이안석건 · {state.date}</div>
+            <div style={{ fontSize:12, opacity:.85, marginTop:2 }}>01045166010 · {state.date}</div>
             <div style={{ fontSize:10, opacity:.6, marginTop:1 }}>by 폭풍간지 이상준 ⚡</div>
           </div>
           <div style={{ fontSize:12, background:"rgba(255,255,255,.2)", borderRadius:6, padding:"4px 10px" }}>총 {totalWorkers}명</div>

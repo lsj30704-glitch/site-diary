@@ -8,6 +8,9 @@ const STORAGE_KEY = "site_diary_v1";
 const HISTORY_KEY = "site_diary_history_v1";
 const SITES_KEY = "site_diary_sites_v1";
 const MANAGER_KEY = "site_diary_last_manager";
+const ROSTER_KEY = "site_diary_roster_v1";
+const ROSTER_META_KEY = "site_diary_roster_meta_v1";
+const ROSTER_PAD = 20;
 
 const DEFAULT_SITES = ["롯데건설 오산 양산동 공동주택공사"];
 const lastManager = () => localStorage.getItem(MANAGER_KEY) || "이상준";
@@ -17,6 +20,10 @@ const load = () => { try { const r = localStorage.getItem(STORAGE_KEY); return r
 const save = s => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch {} };
 const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; } };
 const saveHistory = l => { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(l)); } catch {} };
+const loadRoster = () => { try { return JSON.parse(localStorage.getItem(ROSTER_KEY) || "[]"); } catch { return []; } };
+const saveRoster = l => { try { localStorage.setItem(ROSTER_KEY, JSON.stringify(l)); } catch {} };
+const loadRosterMeta = () => { try { return JSON.parse(localStorage.getItem(ROSTER_META_KEY) || "null") || { company:"은진산업 주식회사", workType:"석공", siteName:"오산 롯데 지역주택조합" }; } catch { return { company:"은진산업 주식회사", workType:"석공", siteName:"오산 롯데 지역주택조합" }; } };
+const saveRosterMeta = m => { try { localStorage.setItem(ROSTER_META_KEY, JSON.stringify(m)); } catch {} };
 
 const TEMPLATES = {
   석공: { s2_1:"설계도 전달 및 줄눈 간격 검토", s2_2:"앵글 브라켓 위치 먹매김 후 석재 가조립", s2_3:"앵글 고정→석재 붙임→에폭시 충전→최종 고정 상호확인", s3_1:"석재 인양 시 와이어로프 체결 상태 확인", s3_2:"고소작업 안전대 착용 및 낙하물 방지망 점검", s3_3:"줄눈 간격 불일치 시 즉시 작업중지 후 상호 확인" },
@@ -31,6 +38,8 @@ const defaultRows = () => PRESET.map(name => ({ id: UID(), name, workers:"", wor
 const defaultState = (site="") => ({ date: TODAY(), site, manager: lastManager(), weather:"", mainWork:"", special:"", rows: defaultRows() });
 
 const fmtDate = d => { const dt = new Date(d); return `${dt.getFullYear()} 년 ${String(dt.getMonth()+1).padStart(2,'0')} 월 ${String(dt.getDate()).padStart(2,'0')} 일`; };
+const defaultRosterRow = () => ({ id: UID(), no:"", job:"", name:"", am:"", pm:"", night:"", work:"", note:"" });
+const rTotal = r => { const n = v => parseFloat(v)||0; const t = n(r.am)+n(r.pm)+n(r.night); return t ? (Number.isInteger(t)?t:t.toFixed(1)) : ""; };
 
 export default function App() {
   const [state, setState] = useState(() => { const s = load(); return s || defaultState(); });
@@ -46,6 +55,11 @@ export default function App() {
   const [photos, setPhotos] = useState([]);
   const [tbm, setTbm] = useState({ subject:"", s1_1:"", s1_2:"", s1_3:"", s2_1:"", s2_2:"", s2_3:"", s3_1:"", s3_2:"", s3_3:"" });
   const photoRef = useRef();
+  const [roster, setRoster] = useState(() => { const r = loadRoster(); return r.length ? r : [defaultRosterRow()]; });
+  const [rosterMeta, setRosterMeta] = useState(() => loadRosterMeta());
+  const [showRoster, setShowRoster] = useState(false);
+  const [imgBusy, setImgBusy] = useState(false);
+  const rosterPrintRef = useRef();
 
   const set = (f, v) => setState(prev => ({ ...prev, [f]: v }));
   const setT = (f, v) => setTbm(prev => ({ ...prev, [f]: v }));
@@ -53,7 +67,27 @@ export default function App() {
   const addRow = (name="") => setState(prev => ({ ...prev, rows: [...prev.rows, { id:UID(), name, workers:"", work:"", note:"" }] }));
   const removeRow = id => setState(prev => ({ ...prev, rows: prev.rows.filter(r => r.id!==id) }));
 
+  const setRM = (f, v) => setRosterMeta(prev => ({ ...prev, [f]: v }));
+  const updateRosterRow = (id, f, v) => setRoster(prev => prev.map(r => r.id===id ? { ...r, [f]:v } : r));
+  const addRosterRow = () => setRoster(prev => [...prev, defaultRosterRow()]);
+  const removeRosterRow = id => setRoster(prev => prev.filter(r => r.id!==id));
+  const importFromProcess = () => {
+    const active = state.rows.filter(r => r.name && parseInt(r.workers) > 0);
+    if (!active.length) { alert("공정별 출력인원에 입력된 내용이 없습니다."); return; }
+    const rows = [];
+    active.forEach(r => { const cnt = parseInt(r.workers)||0; for (let i=0;i<cnt;i++) rows.push({ id:UID(), no:"", job:r.name, name:"", am:"", pm:"", night:"", work:r.work||"", note:"" }); });
+    setRoster(rows);
+  };
+  const clearRoster = () => { if (window.confirm("출력명부를 모두 지울까요?")) setRoster([defaultRosterRow()]); };
+
   useEffect(() => { save(state); if (state.manager) localStorage.setItem(MANAGER_KEY, state.manager); }, [state]);
+  useEffect(() => { saveRoster(roster); }, [roster]);
+  useEffect(() => { saveRosterMeta(rosterMeta); }, [rosterMeta]);
+  useEffect(() => {
+    const onAfterPrint = () => { document.body.classList.remove("printing-tbm","printing-roster"); };
+    window.addEventListener("afterprint", onAfterPrint);
+    return () => window.removeEventListener("afterprint", onAfterPrint);
+  }, []);
 
   const addSite = () => { if (!newSite.trim()) return; const u = [...sites, newSite.trim()]; setSites(u); saveSites(u); setNewSite(""); };
   const removeSite = name => { const u = sites.filter(s => s!==name); setSites(u); saveSites(u); };
@@ -81,12 +115,34 @@ export default function App() {
   };
 
   const handlePhoto = e => { Array.from(e.target.files).forEach(f => { const r = new FileReader(); r.onload = ev => setPhotos(prev => [...prev, ev.target.result]); r.readAsDataURL(f); }); };
-  const handlePrint = () => window.print();
+  const handlePrint = () => { document.body.classList.add("printing-tbm"); window.print(); };
   const handleCopy = () => { navigator.clipboard.writeText(outputText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
   const handleSave = () => { const e = { ...state, savedAt: new Date().toISOString(), id: UID() }; const u = [e, ...history].slice(0,30); setHistory(u); saveHistory(u); setSavedMsg("저장됨!"); setTimeout(() => setSavedMsg(""), 2000); };
-  const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요?")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); } };
+  const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요?")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); setRoster([defaultRosterRow()]); setShowRoster(false); } };
   const loadEntry = e => { setState(e); setTab("write"); setShowOutput(false); setShowTBM(false); };
   const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); };
+
+  const handlePrintRoster = () => { document.body.classList.add("printing-roster"); window.print(); };
+  const handleDownloadRosterImage = async () => {
+    if (!rosterPrintRef.current) return;
+    setImgBusy(true);
+    const node = rosterPrintRef.current;
+    const prevDisplay = node.style.display;
+    node.style.display = "block";
+    try {
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(node, { scale:2, backgroundColor:"#ffffff", useCORS:true });
+      const link = document.createElement("a");
+      link.download = `출력명부_${state.date}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (err) {
+      alert("이미지 다운로드 중 오류가 발생했습니다.");
+    } finally {
+      node.style.display = prevDisplay;
+      setImgBusy(false);
+    }
+  };
 
   const outputText = () => [
     `📋 일일 현장업무일지`, `━━━━━━━━━━━━━━━━━━━━━━`,
@@ -131,7 +187,9 @@ export default function App() {
       <style>{`
         @media print {
           .no-print { display:none !important; }
-          .print-only { display:block !important; }
+          .print-only { display:none !important; }
+          body.printing-tbm .print-tbm { display:block !important; }
+          body.printing-roster .print-roster { display:block !important; }
           @page { margin:10mm; size:A4; }
         }
         .print-only { display:none; }
@@ -214,6 +272,7 @@ export default function App() {
 
             <button style={c.btn("#34a853","#fff")} onClick={generateTBM}>📋 안전교육일지 자동생성</button>
             <button style={c.btn("#1a73e8","#fff")} onClick={() => setShowOutput(v=>!v)}>{showOutput?"출력 닫기":"📤 밴드/카톡 공유용 출력"}</button>
+            <button style={c.btn("#6f42c1","#fff")} onClick={() => setShowRoster(v=>!v)}>{showRoster?"출력명부 닫기":"🧾 출력명부(노무비 일계표) 작성"}</button>
 
             {showOutput && (
               <div style={c.card}>
@@ -262,6 +321,47 @@ export default function App() {
                   </div>
                 )}
                 <button style={c.btn("#ff6d00","#fff")} onClick={handlePrint}>🖨️ PDF 출력</button>
+              </div>
+            )}
+
+            {showRoster && (
+              <div style={{ ...c.card, border:"1px solid #6f42c1", background:"#f8f5ff", marginTop:4 }}>
+                <div style={{ ...c.ct, color:"#6f42c1" }}>🧾 출력점검 및 노무비 일계표 - 출력명부</div>
+                <div style={c.g2}>
+                  <div><label style={c.lbl}>업체명</label><input style={c.ti} value={rosterMeta.company} onChange={e => setRM("company", e.target.value)} /></div>
+                  <div><label style={c.lbl}>공종명</label><input style={c.ti} value={rosterMeta.workType} onChange={e => setRM("workType", e.target.value)} /></div>
+                </div>
+                <label style={c.lbl}>현장명</label>
+                <input style={c.ti} value={rosterMeta.siteName} onChange={e => setRM("siteName", e.target.value)} />
+
+                <button style={c.btn("#f0f4ff","#6f42c1",8)} onClick={importFromProcess}>↓ 공정별 인원 불러오기</button>
+
+                {roster.map((r, idx) => (
+                  <div key={r.id} style={c.rw}>
+                    <div style={c.rt}>
+                      <span style={{ fontSize:12, color:"#888", width:18 }}>{idx+1}</span>
+                      <input value={r.job} onChange={e => updateRosterRow(r.id,"job",e.target.value)} placeholder="직종" style={{ flex:1 }} />
+                      <input value={r.name} onChange={e => updateRosterRow(r.id,"name",e.target.value)} placeholder="성명" style={{ flex:1 }} />
+                      <button onClick={() => removeRosterRow(r.id)} style={c.del}>✕</button>
+                    </div>
+                    <div style={{ display:"flex", gap:6, marginBottom:6 }}>
+                      <input value={r.am} onChange={e => updateRosterRow(r.id,"am",e.target.value)} placeholder="오전" style={{ flex:1, textAlign:"center" }} />
+                      <input value={r.pm} onChange={e => updateRosterRow(r.id,"pm",e.target.value)} placeholder="오후" style={{ flex:1, textAlign:"center" }} />
+                      <input value={r.night} onChange={e => updateRosterRow(r.id,"night",e.target.value)} placeholder="야간" style={{ flex:1, textAlign:"center" }} />
+                      <span style={{ fontSize:13, color:"#6f42c1", fontWeight:600, width:30, textAlign:"center", alignSelf:"center" }}>{rTotal(r)}</span>
+                    </div>
+                    <input value={r.work} onChange={e => updateRosterRow(r.id,"work",e.target.value)} placeholder="작업내용" style={{ marginBottom:6 }} />
+                    <input value={r.note} onChange={e => updateRosterRow(r.id,"note",e.target.value)} placeholder="비고" />
+                  </div>
+                ))}
+
+                <div style={c.sr}>
+                  <button style={c.sb("#f0f4ff","#6f42c1")} onClick={addRosterRow}>+ 인원 추가</button>
+                  <button style={c.sb("none","#ea4335")} onClick={clearRoster}>전체 지우기</button>
+                </div>
+
+                <button style={c.btn("#6f42c1","#fff")} onClick={handlePrintRoster}>🖨️ 출력명부 인쇄(A4)</button>
+                <button style={c.btn("none","#6f42c1")} onClick={handleDownloadRosterImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 출력명부 사진으로 다운로드"}</button>
               </div>
             )}
           </>}
@@ -315,7 +415,7 @@ export default function App() {
       </div>
 
       {/* ── 인쇄 전용 A4 ── */}
-      <div className="print-only" style={{ fontFamily:"'Malgun Gothic','맑은 고딕',sans-serif", fontSize:11, padding:"15mm 18mm", background:"#fff", minHeight:"297mm", width:"210mm" }}>
+      <div className="print-only print-tbm" style={{ fontFamily:"'Malgun Gothic','맑은 고딕',sans-serif", fontSize:11, padding:"15mm 18mm", background:"#fff", minHeight:"297mm", width:"210mm" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"4mm" }}>
           <div style={{ flex:1, textAlign:"center", fontSize:16, fontWeight:700, letterSpacing:4, padding:"6mm 0 4mm", whiteSpace:"nowrap" }}>일상 안전교육일지</div>
           <table style={{ borderCollapse:"collapse" }}>
@@ -405,6 +505,71 @@ export default function App() {
             }
           </div>
         </div>
+      </div>
+
+      {/* ── 출력명부 인쇄/다운로드 전용 A4 ── */}
+      <div className="print-only print-roster" ref={rosterPrintRef} style={{ fontFamily:"'Malgun Gothic','맑은 고딕',sans-serif", fontSize:11, padding:"15mm 12mm", background:"#fff", minHeight:"297mm", width:"210mm" }}>
+        <div style={{ textAlign:"center", fontSize:18, fontWeight:700, letterSpacing:4, marginBottom:"5mm" }}>출력점검 및 노무비 일계표</div>
+        <table style={{ width:"100%", borderCollapse:"collapse", marginBottom:"3mm" }}>
+          <tbody>
+            <tr>
+              <td style={{ border:"1px solid #000", background:"#f0f0f0", fontWeight:700, textAlign:"center", padding:"2mm 3mm", width:"16mm" }}>날짜</td>
+              <td style={{ border:"1px solid #000", padding:"2mm 3mm", textAlign:"center", width:"30mm" }}>{fmtDate(state.date)}</td>
+              <td style={{ border:"1px solid #000", background:"#f0f0f0", fontWeight:700, textAlign:"center", padding:"2mm 3mm", width:"16mm" }}>업체명</td>
+              <td style={{ border:"1px solid #000", padding:"2mm 3mm", textAlign:"center" }}>{rosterMeta.company}</td>
+            </tr>
+            <tr>
+              <td style={{ border:"1px solid #000", background:"#f0f0f0", fontWeight:700, textAlign:"center", padding:"2mm 3mm" }}>공종명</td>
+              <td style={{ border:"1px solid #000", padding:"2mm 3mm", textAlign:"center" }}>{rosterMeta.workType}</td>
+              <td style={{ border:"1px solid #000", background:"#f0f0f0", fontWeight:700, textAlign:"center", padding:"2mm 3mm" }}>현장명</td>
+              <td style={{ border:"1px solid #000", padding:"2mm 3mm", textAlign:"center" }}>{rosterMeta.siteName}</td>
+            </tr>
+          </tbody>
+        </table>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr style={{ background:"#f0f0f0" }}>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"8mm" }}>번호</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"16mm" }}>고유번호</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"16mm" }}>직종</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"18mm" }}>성명</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1mm" }} colSpan={4}>출력시간점검</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm" }}>작업내용</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"14mm" }}>비고</td>
+            </tr>
+            <tr style={{ background:"#f0f0f0" }}>
+              <td style={{ border:"1px solid #000" }}></td>
+              <td style={{ border:"1px solid #000" }}></td>
+              <td style={{ border:"1px solid #000" }}></td>
+              <td style={{ border:"1px solid #000" }}></td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>오전</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>오후</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>야간</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>계</td>
+              <td style={{ border:"1px solid #000" }}></td>
+              <td style={{ border:"1px solid #000" }}></td>
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: Math.max(roster.length, ROSTER_PAD) }).map((_, i) => {
+              const r = roster[i];
+              return (
+                <tr key={i}>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm", height:"6mm" }}>{r ? i+1 : ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.no || ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.job || ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.name || ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.am || ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.pm || ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.night || ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r ? rTotal(r) : ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.work || ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.note || ""}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </>
   );

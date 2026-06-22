@@ -84,9 +84,22 @@ export default function App() {
   useEffect(() => { saveRoster(roster); }, [roster]);
   useEffect(() => { saveRosterMeta(rosterMeta); }, [rosterMeta]);
   useEffect(() => {
-    const onAfterPrint = () => { document.body.classList.remove("printing-tbm","printing-roster"); };
-    window.addEventListener("afterprint", onAfterPrint);
-    return () => window.removeEventListener("afterprint", onAfterPrint);
+    const clearPrintClasses = () => { document.body.classList.remove("printing-tbm","printing-roster"); };
+    window.addEventListener("afterprint", clearPrintClasses);
+    // Safari는 afterprint 이벤트가 누락되는 경우가 있어 matchMedia로도 보강 처리
+    const mql = window.matchMedia ? window.matchMedia("print") : null;
+    const onMqlChange = e => { if (!e.matches) clearPrintClasses(); };
+    if (mql) {
+      if (mql.addEventListener) mql.addEventListener("change", onMqlChange);
+      else if (mql.addListener) mql.addListener(onMqlChange);
+    }
+    return () => {
+      window.removeEventListener("afterprint", clearPrintClasses);
+      if (mql) {
+        if (mql.removeEventListener) mql.removeEventListener("change", onMqlChange);
+        else if (mql.removeListener) mql.removeListener(onMqlChange);
+      }
+    };
   }, []);
 
   const addSite = () => { if (!newSite.trim()) return; const u = [...sites, newSite.trim()]; setSites(u); saveSites(u); setNewSite(""); };
@@ -115,14 +128,27 @@ export default function App() {
   };
 
   const handlePhoto = e => { Array.from(e.target.files).forEach(f => { const r = new FileReader(); r.onload = ev => setPhotos(prev => [...prev, ev.target.result]); r.readAsDataURL(f); }); };
-  const handlePrint = () => { document.body.classList.add("printing-tbm"); window.print(); };
+
+  // 인쇄 클래스를 적용한 뒤 브라우저가 스타일을 반영(repaint)할 시간을 확보하고서 print()를 호출.
+  // (모바일 브라우저 등에서 classList.add 직후 곧바로 print()를 호출하면
+  //  변경된 print CSS가 반영되기 전에 인쇄가 시작되어 빈 페이지로 출력되는 문제가 있었음)
+  const startPrint = printClass => {
+    document.body.classList.remove("printing-tbm", "printing-roster");
+    document.body.classList.add(printClass);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.print();
+      });
+    });
+  };
+  const handlePrint = () => startPrint("printing-tbm");
   const handleCopy = () => { navigator.clipboard.writeText(outputText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
   const handleSave = () => { const e = { ...state, savedAt: new Date().toISOString(), id: UID() }; const u = [e, ...history].slice(0,30); setHistory(u); saveHistory(u); setSavedMsg("저장됨!"); setTimeout(() => setSavedMsg(""), 2000); };
   const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요?")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); setRoster([defaultRosterRow()]); setShowRoster(false); } };
   const loadEntry = e => { setState(e); setTab("write"); setShowOutput(false); setShowTBM(false); };
   const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); };
 
-  const handlePrintRoster = () => { document.body.classList.add("printing-roster"); window.print(); };
+  const handlePrintRoster = () => startPrint("printing-roster");
   const handleDownloadRosterImage = async () => {
     if (!rosterPrintRef.current) return;
     setImgBusy(true);

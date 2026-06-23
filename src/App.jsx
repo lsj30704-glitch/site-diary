@@ -42,7 +42,8 @@ const defaultRosterRow = () => ({ id: UID(), no:"", job:"", name:"", am:"", pm:"
 const rTotal = r => { const n = v => parseFloat(v)||0; const t = n(r.am)+n(r.pm)+n(r.night); return t ? (Number.isInteger(t)?t:t.toFixed(1)) : ""; };
 
 export default function App() {
-  const [state, setState] = useState(() => { const s = load(); return s || defaultState(); });
+  // 앱을 열면(작성 시작) 항상 오늘 날짜가 보이도록 — 작성 중이던 다른 내용은 그대로 유지
+  const [state, setState] = useState(() => { const s = load(); return s ? { ...s, date: TODAY() } : defaultState(); });
   const [tab, setTab] = useState("write");
   const [history, setHistory] = useState(() => loadHistory());
   const [sites, setSites] = useState(() => loadSites());
@@ -83,24 +84,6 @@ export default function App() {
   useEffect(() => { save(state); if (state.manager) localStorage.setItem(MANAGER_KEY, state.manager); }, [state]);
   useEffect(() => { saveRoster(roster); }, [roster]);
   useEffect(() => { saveRosterMeta(rosterMeta); }, [rosterMeta]);
-  useEffect(() => {
-    const clearPrintClasses = () => { document.body.classList.remove("printing-tbm","printing-roster"); };
-    window.addEventListener("afterprint", clearPrintClasses);
-    // Safari는 afterprint 이벤트가 누락되는 경우가 있어 matchMedia로도 보강 처리
-    const mql = window.matchMedia ? window.matchMedia("print") : null;
-    const onMqlChange = e => { if (!e.matches) clearPrintClasses(); };
-    if (mql) {
-      if (mql.addEventListener) mql.addEventListener("change", onMqlChange);
-      else if (mql.addListener) mql.addListener(onMqlChange);
-    }
-    return () => {
-      window.removeEventListener("afterprint", clearPrintClasses);
-      if (mql) {
-        if (mql.removeEventListener) mql.removeEventListener("change", onMqlChange);
-        else if (mql.removeListener) mql.removeListener(onMqlChange);
-      }
-    };
-  }, []);
 
   const addSite = () => { if (!newSite.trim()) return; const u = [...sites, newSite.trim()]; setSites(u); saveSites(u); setNewSite(""); };
   const removeSite = name => { const u = sites.filter(s => s!==name); setSites(u); saveSites(u); };
@@ -129,26 +112,44 @@ export default function App() {
 
   const handlePhoto = e => { Array.from(e.target.files).forEach(f => { const r = new FileReader(); r.onload = ev => setPhotos(prev => [...prev, ev.target.result]); r.readAsDataURL(f); }); };
 
-  // 인쇄 클래스를 적용한 뒤 브라우저가 스타일을 반영(repaint)할 시간을 확보하고서 print()를 호출.
-  // (모바일 브라우저 등에서 classList.add 직후 곧바로 print()를 호출하면
-  //  변경된 print CSS가 반영되기 전에 인쇄가 시작되어 빈 페이지로 출력되는 문제가 있었음)
-  const startPrint = printClass => {
-    document.body.classList.remove("printing-tbm", "printing-roster");
-    document.body.classList.add(printClass);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.print();
-      });
-    });
-  };
-  const handlePrint = () => startPrint("printing-tbm");
+  // 안전교육일지(TBM)는 화면에 항상 렌더된 .print-only 영역을 그대로 인쇄.
+  // (body 클래스 토글 없이 단순 print() — 모바일 'PDF로 저장'에서 가장 안정적)
+  const handlePrint = () => window.print();
   const handleCopy = () => { navigator.clipboard.writeText(outputText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
-  const handleSave = () => { const e = { ...state, savedAt: new Date().toISOString(), id: UID() }; const u = [e, ...history].slice(0,30); setHistory(u); saveHistory(u); setSavedMsg("저장됨!"); setTimeout(() => setSavedMsg(""), 2000); };
+  const handleSave = () => {
+    // 같은 현장·같은 날짜의 일지가 이미 있으면 중복 저장 금지 (원칙적으로 1일 1건)
+    const dup = history.find(h => h.date === state.date && (h.site||"") === (state.site||""));
+    if (dup) {
+      const ok = window.confirm(`⚠️ ${state.date} 같은 날짜의 일지가 이미 저장되어 있습니다.\n\n기존 일지를 덮어쓸까요?\n(취소하면 저장하지 않습니다. 중복 날짜는 저장되지 않습니다.)`);
+      if (!ok) return;
+      const e = { ...state, savedAt: new Date().toISOString(), id: dup.id };
+      const u = history.map(h => h.id === dup.id ? e : h);
+      setHistory(u); saveHistory(u); setSavedMsg("덮어쓰기 저장됨!"); setTimeout(() => setSavedMsg(""), 2000);
+      return;
+    }
+    const e = { ...state, savedAt: new Date().toISOString(), id: UID() };
+    const u = [e, ...history].slice(0,60); setHistory(u); saveHistory(u); setSavedMsg("저장됨!"); setTimeout(() => setSavedMsg(""), 2000);
+  };
+  // 전일(가장 최근 저장본) 작업 내용을 현재 작성 폼으로 복사 — 날짜는 오늘로 유지
+  const handleCopyPrev = () => {
+    if (!history.length) { alert("저장된 일지가 없습니다. 먼저 일지를 저장해 주세요."); return; }
+    const prev = [...history].sort((a,b) => (b.savedAt||"").localeCompare(a.savedAt||""))[0];
+    if (!window.confirm(`'${prev.date}' 일지의 작업 내용을 불러올까요?\n(날짜는 오늘 ${TODAY()}로 설정됩니다)`)) return;
+    setState({
+      date: TODAY(),
+      site: prev.site || state.site,
+      manager: prev.manager || state.manager,
+      weather: prev.weather || "",
+      mainWork: prev.mainWork || "",
+      special: prev.special || "",
+      rows: (prev.rows && prev.rows.length ? prev.rows : defaultRows()).map(r => ({ ...r, id: UID() })),
+    });
+    setSavedMsg("전일 작업 복사됨!"); setTimeout(() => setSavedMsg(""), 2000);
+  };
   const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요?")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); setRoster([defaultRosterRow()]); setShowRoster(false); } };
   const loadEntry = e => { setState(e); setTab("write"); setShowOutput(false); setShowTBM(false); };
   const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); };
 
-  const handlePrintRoster = () => startPrint("printing-roster");
   const handleDownloadRosterImage = async () => {
     if (!rosterPrintRef.current) return;
     setImgBusy(true);
@@ -213,9 +214,7 @@ export default function App() {
       <style>{`
         @media print {
           .no-print { display:none !important; }
-          .print-only { display:none !important; }
-          body.printing-tbm .print-tbm { display:block !important; }
-          body.printing-roster .print-roster { display:block !important; }
+          .print-only { display:block !important; }
           @page { margin:10mm; size:A4; }
         }
         .print-only { display:none; }
@@ -295,6 +294,7 @@ export default function App() {
               <button style={c.sb("#34a853","#fff")} onClick={handleSave}>💾 저장</button>
               <button style={c.sb("none","#ea4335")} onClick={handleNewDay}>🔄 새 날짜</button>
             </div>
+            <button style={c.btn("#f0f4ff","#1a73e8")} onClick={handleCopyPrev}>📄 전일 작업 내용 복사하기</button>
 
             <button style={c.btn("#34a853","#fff")} onClick={generateTBM}>📋 안전교육일지 자동생성</button>
             <button style={c.btn("#1a73e8","#fff")} onClick={() => setShowOutput(v=>!v)}>{showOutput?"출력 닫기":"📤 밴드/카톡 공유용 출력"}</button>
@@ -386,8 +386,7 @@ export default function App() {
                   <button style={c.sb("none","#ea4335")} onClick={clearRoster}>전체 지우기</button>
                 </div>
 
-                <button style={c.btn("#6f42c1","#fff")} onClick={handlePrintRoster}>🖨️ 출력명부 인쇄(A4)</button>
-                <button style={c.btn("none","#6f42c1")} onClick={handleDownloadRosterImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 출력명부 사진으로 다운로드"}</button>
+                <button style={c.btn("#6f42c1","#fff")} onClick={handleDownloadRosterImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 출력명부 사진(이미지)으로 저장"}</button>
               </div>
             )}
           </>}
@@ -533,8 +532,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── 출력명부 인쇄/다운로드 전용 A4 ── */}
-      <div className="print-only print-roster" ref={rosterPrintRef} style={{ fontFamily:"'Malgun Gothic','맑은 고딕',sans-serif", fontSize:11, padding:"15mm 12mm", background:"#fff", minHeight:"297mm", width:"210mm" }}>
+      {/* ── 출력명부 이미지 다운로드 전용 A4 (인쇄 안 함, html2canvas 전용) ── */}
+      <div className="roster-capture" ref={rosterPrintRef} style={{ display:"none", fontFamily:"'Malgun Gothic','맑은 고딕',sans-serif", fontSize:11, padding:"15mm 12mm", background:"#fff", minHeight:"297mm", width:"210mm" }}>
         <div style={{ textAlign:"center", fontSize:18, fontWeight:700, letterSpacing:4, marginBottom:"5mm" }}>출력점검 및 노무비 일계표</div>
         <table style={{ width:"100%", borderCollapse:"collapse", marginBottom:"3mm" }}>
           <tbody>

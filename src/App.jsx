@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 
 const PRESET = ["석공", "비계", "코킹", "트러스"];
 const QUICK = ["양중", "철거", "미장", "도장", "배관", "전기"];
-const TODAY = () => new Date().toISOString().slice(0, 10);
+const TODAY = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const UID = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
 const STORAGE_KEY = "site_diary_v1";
 const HISTORY_KEY = "site_diary_history_v1";
@@ -319,26 +319,6 @@ export default function App() {
                 <button style={c.btn("#6f42c1","#fff")} onClick={handleDownloadRosterImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 출력명부 사진(이미지)으로 저장"}</button>
               </div>
 
-            <div style={c.card}>
-              <div style={c.ct}>👷 공정별 출력인원</div>
-              {state.rows.map(r => (
-                <div key={r.id} style={c.rw}>
-                  <div style={c.rt}>
-                    <input value={r.name} onChange={e => updateRow(r.id,"name",e.target.value)} placeholder="공정명" style={{ flex:1 }} />
-                    <input type="number" min="0" value={r.workers} onChange={e => updateRow(r.id,"workers",e.target.value)} placeholder="0" style={{ width:52, textAlign:"center" }} />
-                    <span style={{ fontSize:13, color:"#888", whiteSpace:"nowrap" }}>명</span>
-                    <button onClick={() => removeRow(r.id)} style={c.del}>✕</button>
-                  </div>
-                  <input value={r.work} onChange={e => updateRow(r.id,"work",e.target.value)} placeholder="작업 내용" style={{ marginBottom:6 }} />
-                  <input value={r.note} onChange={e => updateRow(r.id,"note",e.target.value)} placeholder="비고" />
-                </div>
-              ))}
-              <div style={c.qw}>
-                {QUICK.map(n => <button key={n} style={c.qb} onClick={() => addRow(n)}>{n}</button>)}
-                <button style={{ ...c.qb, borderStyle:"solid", color:"#1a73e8", borderColor:"#1a73e8" }} onClick={() => addRow("")}>+ 직접입력</button>
-              </div>
-              <div style={c.tot}>합계 <span style={{ fontSize:20 }}>{totalWorkers}</span> 명</div>
-            </div>
 
             <div style={c.card}>
               <div style={c.ct}>📌 주요 업무</div>

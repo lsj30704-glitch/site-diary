@@ -122,12 +122,12 @@ export default function App() {
     if (dup) {
       const ok = window.confirm(`⚠️ ${state.date} 같은 날짜의 일지가 이미 저장되어 있습니다.\n\n기존 일지를 덮어쓸까요?\n(취소하면 저장하지 않습니다. 중복 날짜는 저장되지 않습니다.)`);
       if (!ok) return;
-      const e = { ...state, savedAt: new Date().toISOString(), id: dup.id };
+      const e = { ...state, roster, rosterMeta, savedAt: new Date().toISOString(), id: dup.id };
       const u = history.map(h => h.id === dup.id ? e : h);
       setHistory(u); saveHistory(u); setSavedMsg("덮어쓰기 저장됨!"); setTimeout(() => setSavedMsg(""), 2000);
       return;
     }
-    const e = { ...state, savedAt: new Date().toISOString(), id: UID() };
+    const e = { ...state, roster, rosterMeta, savedAt: new Date().toISOString(), id: UID() };
     const u = [e, ...history].slice(0,60); setHistory(u); saveHistory(u); setSavedMsg("저장됨!"); setTimeout(() => setSavedMsg(""), 2000);
   };
   // 전일(가장 최근 저장본) 작업 내용을 현재 작성 폼으로 복사 — 날짜는 오늘로 유지
@@ -144,7 +144,10 @@ export default function App() {
       special: prev.special || "",
       rows: (prev.rows && prev.rows.length ? prev.rows : defaultRows()).map(r => ({ ...r, id: UID() })),
     });
-    setSavedMsg("전일 작업 복사됨!"); setTimeout(() => setSavedMsg(""), 2000);
+    // 전일 출력일지(출력명부)도 그대로 함께 복사
+    if (prev.roster && prev.roster.length) setRoster(prev.roster.map(r => ({ ...r, id: UID() })));
+    if (prev.rosterMeta) setRosterMeta(prev.rosterMeta);
+    setSavedMsg("전일 작업·출력일지 복사됨!"); setTimeout(() => setSavedMsg(""), 2000);
   };
   const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요?")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); setRoster([defaultRosterRow()]); setShowRoster(false); } };
   const loadEntry = e => { setState(e); setTab("write"); setShowOutput(false); setShowTBM(false); };

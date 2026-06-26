@@ -171,7 +171,14 @@ export default function App() {
     setSavedMsg("전일 작업·출력일지 복사됨!"); setTimeout(() => setSavedMsg(""), 2000);
   };
   const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요? (출력명부는 유지됩니다)")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); } };
-  const loadEntry = e => { setState(e); setTab("write"); setShowOutput(false); setShowTBM(false); };
+  const loadEntry = e => {
+    setState(e);
+    // 저장 당시의 출력명부(명단)도 함께 복원
+    if (e.roster && e.roster.length) setRoster(e.roster.map(r => ({ ...r, id: UID() })));
+    else setRoster([defaultRosterRow()]);
+    if (e.rosterMeta) setRosterMeta(e.rosterMeta);
+    setTab("write"); setShowOutput(false); setShowTBM(false);
+  };
   const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); };
 
   const handleDownloadRosterImage = async () => {

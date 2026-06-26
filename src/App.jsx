@@ -85,6 +85,20 @@ export default function App() {
   useEffect(() => { saveRoster(roster); }, [roster]);
   useEffect(() => { saveRosterMeta(rosterMeta); }, [rosterMeta]);
 
+  // 출력명부(직종·인원)를 자동 집계해 '공정별 출력인원'을 채움 — 출력명부가 기준
+  const aggregateRows = rs => {
+    const map = new Map();
+    rs.forEach(r => {
+      const job = (r.job||"").trim();
+      if (!job) return;
+      if (!(r.name && r.name.trim()) && rTotal(r)==="") return;
+      if (!map.has(job)) map.set(job, { id:UID(), name:job, workers:0, work:r.work||"", note:"" });
+      const e = map.get(job); e.workers += 1; if (!e.work && r.work) e.work = r.work;
+    });
+    return [...map.values()].map(e => ({ ...e, workers:String(e.workers) }));
+  };
+  useEffect(() => { const agg = aggregateRows(roster); if (agg.length) setState(prev => ({ ...prev, rows: agg })); }, [roster]);
+
   const addSite = () => { if (!newSite.trim()) return; const u = [...sites, newSite.trim()]; setSites(u); saveSites(u); setNewSite(""); };
   const removeSite = name => { const u = sites.filter(s => s!==name); setSites(u); saveSites(u); };
 
@@ -117,18 +131,25 @@ export default function App() {
   const handlePrint = () => window.print();
   const handleCopy = () => { navigator.clipboard.writeText(outputText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
   const handleSave = () => {
-    // 같은 현장·같은 날짜의 일지가 이미 있으면 중복 저장 금지 (원칙적으로 1일 1건)
+    // 같은 현장·같은 날짜의 일지가 이미 있으면 덮어쓰기 확인
     const dup = history.find(h => h.date === state.date && (h.site||"") === (state.site||""));
+    let u;
     if (dup) {
-      const ok = window.confirm(`⚠️ ${state.date} 같은 날짜의 일지가 이미 저장되어 있습니다.\n\n기존 일지를 덮어쓸까요?\n(취소하면 저장하지 않습니다. 중복 날짜는 저장되지 않습니다.)`);
+      const ok = window.confirm(`⚠️ ${state.date} 같은 날짜의 일지가 이미 저장되어 있습니다.\n\n기존 일지를 덮어쓸까요?\n(취소하면 저장하지 않습니다.)`);
       if (!ok) return;
       const e = { ...state, roster, rosterMeta, savedAt: new Date().toISOString(), id: dup.id };
-      const u = history.map(h => h.id === dup.id ? e : h);
-      setHistory(u); saveHistory(u); setSavedMsg("덮어쓰기 저장됨!"); setTimeout(() => setSavedMsg(""), 2000);
-      return;
+      u = history.map(h => h.id === dup.id ? e : h);
+    } else {
+      const e = { ...state, roster, rosterMeta, savedAt: new Date().toISOString(), id: UID() };
+      u = [e, ...history];
     }
-    const e = { ...state, roster, rosterMeta, savedAt: new Date().toISOString(), id: UID() };
-    const u = [e, ...history].slice(0,60); setHistory(u); saveHistory(u); setSavedMsg("저장됨!"); setTimeout(() => setSavedMsg(""), 2000);
+    setHistory(u); saveHistory(u);
+    // 저장 후: 작성 화면 비움(데이터는 저장목록에 보관) → 안내 → 저장목록으로 이동
+    setState(defaultState(state.site));
+    setRoster([defaultRosterRow()]);
+    setShowOutput(false); setShowTBM(false); setPhotos([]);
+    setSavedMsg("저장되었습니다"); setTimeout(() => setSavedMsg(""), 2000);
+    setTab("history");
   };
   // 전일(가장 최근 저장본) 작업 내용을 현재 작성 폼으로 복사 — 날짜는 오늘로 유지
   const handleCopyPrev = () => {
@@ -149,7 +170,7 @@ export default function App() {
     if (prev.rosterMeta) setRosterMeta(prev.rosterMeta);
     setSavedMsg("전일 작업·출력일지 복사됨!"); setTimeout(() => setSavedMsg(""), 2000);
   };
-  const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요?")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); setRoster([defaultRosterRow()]); setShowRoster(false); } };
+  const handleNewDay = () => { if (window.confirm("새 날짜로 초기화할까요? (출력명부는 유지됩니다)")) { setState({ ...defaultState(state.site), date: TODAY() }); setShowOutput(false); setShowTBM(false); setPhotos([]); } };
   const loadEntry = e => { setState(e); setTab("write"); setShowOutput(false); setShowTBM(false); };
   const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); };
 
@@ -262,6 +283,42 @@ export default function App() {
               </div>
             </div>
 
+              <div style={{ ...c.card, border:"1px solid #6f42c1", background:"#f8f5ff", marginTop:4 }}>
+                <div style={{ ...c.ct, color:"#6f42c1" }}>🧾 출력점검 및 노무비 일계표 - 출력명부</div>
+                <div style={c.g2}>
+                  <div><label style={c.lbl}>업체명</label><input style={c.ti} value={rosterMeta.company} onChange={e => setRM("company", e.target.value)} /></div>
+                  <div><label style={c.lbl}>공종명</label><input style={c.ti} value={rosterMeta.workType} onChange={e => setRM("workType", e.target.value)} /></div>
+                </div>
+                <label style={c.lbl}>현장명</label>
+                <input style={c.ti} value={rosterMeta.siteName} onChange={e => setRM("siteName", e.target.value)} />
+
+                {roster.map((r, idx) => (
+                  <div key={r.id} style={c.rw}>
+                    <div style={c.rt}>
+                      <span style={{ fontSize:12, color:"#888", width:18 }}>{idx+1}</span>
+                      <input value={r.job} onChange={e => updateRosterRow(r.id,"job",e.target.value)} placeholder="직종" style={{ flex:1 }} />
+                      <input value={r.name} onChange={e => updateRosterRow(r.id,"name",e.target.value)} placeholder="성명" style={{ flex:1 }} />
+                      <button onClick={() => removeRosterRow(r.id)} style={c.del}>✕</button>
+                    </div>
+                    <div style={{ display:"flex", gap:6, marginBottom:6 }}>
+                      <input value={r.am} onChange={e => updateRosterRow(r.id,"am",e.target.value)} placeholder="오전" style={{ flex:1, textAlign:"center" }} />
+                      <input value={r.pm} onChange={e => updateRosterRow(r.id,"pm",e.target.value)} placeholder="오후" style={{ flex:1, textAlign:"center" }} />
+                      <input value={r.night} onChange={e => updateRosterRow(r.id,"night",e.target.value)} placeholder="야간" style={{ flex:1, textAlign:"center" }} />
+                      <span style={{ fontSize:13, color:"#6f42c1", fontWeight:600, width:30, textAlign:"center", alignSelf:"center" }}>{rTotal(r)}</span>
+                    </div>
+                    <input value={r.work} onChange={e => updateRosterRow(r.id,"work",e.target.value)} placeholder="작업내용" style={{ marginBottom:6 }} />
+                    <input value={r.note} onChange={e => updateRosterRow(r.id,"note",e.target.value)} placeholder="비고" />
+                  </div>
+                ))}
+
+                <div style={c.sr}>
+                  <button style={c.sb("#f0f4ff","#6f42c1")} onClick={addRosterRow}>+ 인원 추가</button>
+                  <button style={c.sb("none","#ea4335")} onClick={clearRoster}>전체 지우기</button>
+                </div>
+
+                <button style={c.btn("#6f42c1","#fff")} onClick={handleDownloadRosterImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 출력명부 사진(이미지)으로 저장"}</button>
+              </div>
+
             <div style={c.card}>
               <div style={c.ct}>👷 공정별 출력인원</div>
               {state.rows.map(r => (
@@ -301,7 +358,6 @@ export default function App() {
 
             <button style={c.btn("#34a853","#fff")} onClick={generateTBM}>📋 안전교육일지 자동생성</button>
             <button style={c.btn("#1a73e8","#fff")} onClick={() => setShowOutput(v=>!v)}>{showOutput?"출력 닫기":"📤 밴드/카톡 공유용 출력"}</button>
-            <button style={c.btn("#6f42c1","#fff")} onClick={() => setShowRoster(v=>!v)}>{showRoster?"출력명부 닫기":"🧾 출력명부(노무비 일계표) 작성"}</button>
 
             {showOutput && (
               <div style={c.card}>
@@ -353,45 +409,6 @@ export default function App() {
               </div>
             )}
 
-            {showRoster && (
-              <div style={{ ...c.card, border:"1px solid #6f42c1", background:"#f8f5ff", marginTop:4 }}>
-                <div style={{ ...c.ct, color:"#6f42c1" }}>🧾 출력점검 및 노무비 일계표 - 출력명부</div>
-                <div style={c.g2}>
-                  <div><label style={c.lbl}>업체명</label><input style={c.ti} value={rosterMeta.company} onChange={e => setRM("company", e.target.value)} /></div>
-                  <div><label style={c.lbl}>공종명</label><input style={c.ti} value={rosterMeta.workType} onChange={e => setRM("workType", e.target.value)} /></div>
-                </div>
-                <label style={c.lbl}>현장명</label>
-                <input style={c.ti} value={rosterMeta.siteName} onChange={e => setRM("siteName", e.target.value)} />
-
-                <button style={c.btn("#f0f4ff","#6f42c1",8)} onClick={importFromProcess}>↓ 공정별 인원 불러오기</button>
-
-                {roster.map((r, idx) => (
-                  <div key={r.id} style={c.rw}>
-                    <div style={c.rt}>
-                      <span style={{ fontSize:12, color:"#888", width:18 }}>{idx+1}</span>
-                      <input value={r.job} onChange={e => updateRosterRow(r.id,"job",e.target.value)} placeholder="직종" style={{ flex:1 }} />
-                      <input value={r.name} onChange={e => updateRosterRow(r.id,"name",e.target.value)} placeholder="성명" style={{ flex:1 }} />
-                      <button onClick={() => removeRosterRow(r.id)} style={c.del}>✕</button>
-                    </div>
-                    <div style={{ display:"flex", gap:6, marginBottom:6 }}>
-                      <input value={r.am} onChange={e => updateRosterRow(r.id,"am",e.target.value)} placeholder="오전" style={{ flex:1, textAlign:"center" }} />
-                      <input value={r.pm} onChange={e => updateRosterRow(r.id,"pm",e.target.value)} placeholder="오후" style={{ flex:1, textAlign:"center" }} />
-                      <input value={r.night} onChange={e => updateRosterRow(r.id,"night",e.target.value)} placeholder="야간" style={{ flex:1, textAlign:"center" }} />
-                      <span style={{ fontSize:13, color:"#6f42c1", fontWeight:600, width:30, textAlign:"center", alignSelf:"center" }}>{rTotal(r)}</span>
-                    </div>
-                    <input value={r.work} onChange={e => updateRosterRow(r.id,"work",e.target.value)} placeholder="작업내용" style={{ marginBottom:6 }} />
-                    <input value={r.note} onChange={e => updateRosterRow(r.id,"note",e.target.value)} placeholder="비고" />
-                  </div>
-                ))}
-
-                <div style={c.sr}>
-                  <button style={c.sb("#f0f4ff","#6f42c1")} onClick={addRosterRow}>+ 인원 추가</button>
-                  <button style={c.sb("none","#ea4335")} onClick={clearRoster}>전체 지우기</button>
-                </div>
-
-                <button style={c.btn("#6f42c1","#fff")} onClick={handleDownloadRosterImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 출력명부 사진(이미지)으로 저장"}</button>
-              </div>
-            )}
           </>}
 
           {tab==="history" && <>

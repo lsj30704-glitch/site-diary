@@ -25,6 +25,16 @@ const saveRoster = l => { try { localStorage.setItem(ROSTER_KEY, JSON.stringify(
 const loadRosterMeta = () => { try { return JSON.parse(localStorage.getItem(ROSTER_META_KEY) || "null") || { company:"은진산업 주식회사", workType:"석공", siteName:"오산 롯데 지역주택조합" }; } catch { return { company:"은진산업 주식회사", workType:"석공", siteName:"오산 롯데 지역주택조합" }; } };
 const saveRosterMeta = m => { try { localStorage.setItem(ROSTER_META_KEY, JSON.stringify(m)); } catch {} };
 
+// 결과물(이미지 PNG / PDF) 보관 — 용량 큰 바이너리는 localStorage(약 5MB) 대신 IndexedDB에 Blob으로 저장
+const IDB_NAME = "site_diary_files_v1";
+const IDB_STORE = "artifacts";
+const idbOpen = () => new Promise((res, rej) => { const r = indexedDB.open(IDB_NAME, 1); r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(IDB_STORE)) r.result.createObjectStore(IDB_STORE); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const idbPut = async (key, val) => { const db = await idbOpen(); return new Promise((res, rej) => { const tx = db.transaction(IDB_STORE, "readwrite"); tx.objectStore(IDB_STORE).put(val, key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); };
+const idbGet = async key => { const db = await idbOpen(); return new Promise((res, rej) => { const tx = db.transaction(IDB_STORE, "readonly"); const rq = tx.objectStore(IDB_STORE).get(key); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); }); };
+const idbDel = async key => { const db = await idbOpen(); return new Promise((res, rej) => { const tx = db.transaction(IDB_STORE, "readwrite"); tx.objectStore(IDB_STORE).delete(key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); };
+const blobToDataURL = blob => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); });
+const downloadBlob = (blob, filename) => { const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); };
+
 const TEMPLATES = {
   석공: { s2_1:"설계도 전달 및 줄눈 간격 검토", s2_2:"앵글 브라켓 위치 먹매김 후 석재 가조립", s2_3:"앵글 고정→석재 붙임→에폭시 충전→최종 고정 상호확인", s3_1:"석재 인양 시 와이어로프 체결 상태 확인", s3_2:"고소작업 안전대 착용 및 낙하물 방지망 점검", s3_3:"줄눈 간격 불일치 시 즉시 작업중지 후 상호 확인" },
   비계: { s2_1:"시스템 비계 설치 도면 전달", s2_2:"벽체 앙카 위치 먹매김 및 작업 계획 전달", s2_3:"수직재→수평재→가새 순서 시공순서도 교육 상호확인", s3_1:"비계 설치도 확인 후 작업", s3_2:"비계공사 안전대 걸이 중요성 설명 (월타이 간격 준수)", s3_3:"작업발판 틈새·강풍 시 작업중지 상호 확인" },
@@ -63,6 +73,7 @@ export default function App() {
   const [showRoster, setShowRoster] = useState(false);
   const [imgBusy, setImgBusy] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [exportMonthSel, setExportMonthSel] = useState("");
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
 
@@ -107,6 +118,7 @@ export default function App() {
   const removeSite = name => { const u = sites.filter(s => s!==name); setSites(u); saveSites(u); };
 
   const totalWorkers = state.rows.reduce((s, r) => s + (parseInt(r.workers)||0), 0);
+  const months = [...new Set(history.map(h => (h.date||"").slice(0,7)).filter(Boolean))].sort().reverse();
 
   const generateTBM = () => {
     const active = state.rows.filter(r => r.name && parseInt(r.workers) > 0);
@@ -134,19 +146,103 @@ export default function App() {
   // (body 클래스 토글 없이 단순 print() — 모바일 'PDF로 저장'에서 가장 안정적)
   const handlePrint = () => window.print();
   const handleCopy = () => { navigator.clipboard.writeText(outputText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
-  const handleSave = () => {
+  // 노드 1개를 PNG+PDF로 캡처(같은 캔버스 재사용)
+  const captureNode = async node => {
+    if (!node) return null;
+    const { default: html2canvas } = await import("html2canvas");
+    const prev = node.style.display; node.style.display = "block";
+    try {
+      const canvas = await html2canvas(node, { scale:2, backgroundColor:"#ffffff", useCORS:true });
+      const png = await new Promise(r => canvas.toBlob(r, "image/png"));
+      const dataUrl = canvas.toDataURL("image/png");
+      const { jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit:"px", format:[canvas.width, canvas.height], orientation: canvas.width >= canvas.height ? "l" : "p" });
+      pdf.addImage(dataUrl, "PNG", 0, 0, canvas.width, canvas.height);
+      return { png, pdf: pdf.output("blob") };
+    } finally { node.style.display = prev; }
+  };
+  // 저장 시 결과물(출력일보/안전교육일지 PNG+PDF)을 IndexedDB에 보관, 보유 플래그 반환
+  const saveArtifacts = async id => {
+    const hasRoster = roster.some(r => `${r.job||""}${r.name||""}${r.am||""}${r.pm||""}${r.night||""}${r.work||""}`.trim());
+    const hasTbm = !!(tbm.subject && tbm.subject.trim());
+    const files = { rosterPng:false, rosterPdf:false, tbmPng:false, tbmPdf:false };
+    try {
+      const rec = {};
+      if (hasRoster) { const a = await captureNode(rosterPrintRef.current); if (a) { rec.rosterPng = a.png; rec.rosterPdf = a.pdf; files.rosterPng = !!a.png; files.rosterPdf = !!a.pdf; } }
+      if (hasTbm) { const a = await captureNode(tbmPrintRef.current); if (a) { rec.tbmPng = a.png; rec.tbmPdf = a.pdf; files.tbmPng = !!a.png; files.tbmPdf = !!a.pdf; } }
+      if (Object.keys(rec).length) await idbPut(id, rec); else await idbDel(id).catch(() => {});
+    } catch (e) {
+      alert("결과물(이미지/PDF) 보관 중 오류가 발생했습니다. 일지 본문은 정상 저장됩니다.");
+      return { rosterPng:false, rosterPdf:false, tbmPng:false, tbmPdf:false };
+    }
+    return files;
+  };
+  // 저장목록에서 보관된 이미지 열기 → 미리보기 모달(이미지) + PDF/저장
+  const openArtifact = async (id, pngKey, pdfKey, baseName) => {
+    try {
+      const rec = await idbGet(id);
+      const blob = rec && rec[pngKey];
+      if (!blob) { alert("보관된 이미지가 없습니다."); return; }
+      const url = await blobToDataURL(blob);
+      setPreview({ url, filename: `${baseName}.png`, allowPdf: !!(rec && rec[pdfKey]), artifact: { id, pdfKey, pdfName: `${baseName}.pdf` } });
+    } catch (e) { alert("이미지를 불러오지 못했습니다."); }
+  };
+  // 미리보기 → 보관된 PDF 다운로드
+  const handlePdfFromPreview = async () => {
+    if (!preview || !preview.artifact) return;
+    try {
+      const rec = await idbGet(preview.artifact.id);
+      const blob = rec && rec[preview.artifact.pdfKey];
+      if (!blob) { alert("보관된 PDF가 없습니다."); return; }
+      downloadBlob(blob, preview.artifact.pdfName);
+    } catch (e) { alert("PDF를 불러오지 못했습니다."); }
+  };
+  // 내보내기: 데이터(json) + 이미지(png) + PDF를 ZIP 한 파일로
+  const buildZip = async entries => {
+    const { default: JSZip } = await import("jszip");
+    const zip = new JSZip();
+    zip.file("data.json", JSON.stringify(entries, null, 2));
+    for (const e of entries) {
+      let rec = null; try { rec = await idbGet(e.id); } catch (err) { rec = null; }
+      const folder = `${e.date}_${(e.site||"현장").replace(/[\\/:*?"<>|]/g,"_")}`;
+      if (rec && rec.rosterPng) zip.file(`${folder}/출력일보.png`, rec.rosterPng);
+      if (rec && rec.rosterPdf) zip.file(`${folder}/출력일보.pdf`, rec.rosterPdf);
+      if (rec && rec.tbmPng) zip.file(`${folder}/안전교육일지.png`, rec.tbmPng);
+      if (rec && rec.tbmPdf) zip.file(`${folder}/안전교육일지.pdf`, rec.tbmPdf);
+    }
+    return await zip.generateAsync({ type:"blob" });
+  };
+  const exportEntries = async (entries, name) => {
+    if (!entries.length) { alert("내보낼 항목이 없습니다."); return; }
+    setSavedMsg("내보내기 생성 중...");
+    try { const blob = await buildZip(entries); downloadBlob(blob, name); setSavedMsg("내보내기 완료"); }
+    catch (e) { alert("내보내기 중 오류가 발생했습니다."); setSavedMsg(""); return; }
+    setTimeout(() => setSavedMsg(""), 2000);
+  };
+  const exportMonth = ym => { if (!ym) { alert("월을 선택해 주세요."); return; } exportEntries(history.filter(h => (h.date||"").startsWith(ym)), `site-diary_${ym}.zip`); };
+  const exportDay = e => exportEntries([e], `site-diary_${e.date}.zip`);
+  const deleteMonth = ym => {
+    if (!ym) { alert("월을 선택해 주세요."); return; }
+    const targets = history.filter(h => (h.date||"").startsWith(ym));
+    if (!targets.length) { alert("해당 월의 저장 항목이 없습니다."); return; }
+    if (!window.confirm(`${ym} 의 저장 항목 ${targets.length}건을 모두 삭제할까요?\n(되돌릴 수 없습니다)`)) return;
+    setHistory(history.filter(h => !(h.date||"").startsWith(ym)));
+    saveHistory(history.filter(h => !(h.date||"").startsWith(ym)));
+    targets.forEach(t => idbDel(t.id).catch(() => {}));
+  };
+
+  const handleSave = async () => {
     // 같은 현장·같은 날짜의 일지가 이미 있으면 덮어쓰기 확인
     const dup = history.find(h => h.date === state.date && (h.site||"") === (state.site||""));
-    let u;
     if (dup) {
       const ok = window.confirm(`⚠️ ${state.date} 같은 날짜의 일지가 이미 저장되어 있습니다.\n\n기존 일지를 덮어쓸까요?\n(취소하면 저장하지 않습니다.)`);
       if (!ok) return;
-      const e = { ...state, roster, rosterMeta, savedAt: new Date().toISOString(), id: dup.id };
-      u = history.map(h => h.id === dup.id ? e : h);
-    } else {
-      const e = { ...state, roster, rosterMeta, savedAt: new Date().toISOString(), id: UID() };
-      u = [e, ...history];
     }
+    const id = dup ? dup.id : UID();
+    setSavedMsg("저장 중...");
+    const files = await saveArtifacts(id);
+    const e = { ...state, roster, rosterMeta, files, savedAt: new Date().toISOString(), id };
+    const u = dup ? history.map(h => h.id === id ? e : h) : [e, ...history];
     setHistory(u); saveHistory(u);
     // 저장 후: 작성 화면 비움(데이터는 저장목록에 보관) → 안내 → 저장목록으로 이동
     setState(defaultState(state.site));
@@ -183,7 +279,7 @@ export default function App() {
     if (e.rosterMeta) setRosterMeta(e.rosterMeta);
     setTab("write"); setShowOutput(false); setShowTBM(false);
   };
-  const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); };
+  const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); idbDel(id).catch(() => {}); };
 
   // PNG: 캡처 → 미리보기 모달 (안전교육일지/출력명부 공통)
   const captureToPreview = async (node, filename) => {
@@ -435,6 +531,16 @@ export default function App() {
                 <button key={s} onClick={() => setHistFilter(s)} style={{ fontSize:12, padding:"5px 10px", borderRadius:16, border:"1px solid", borderColor:histFilter===s?"#1a73e8":"#ddd", background:histFilter===s?"#e8f0fe":"#fff", color:histFilter===s?"#1a73e8":"#666", cursor:"pointer" }}>{s}</button>
               ))}
             </div>
+            {months.length > 0 && (
+              <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap", marginBottom:12, padding:"10px 12px", background:"#fff", borderRadius:10, border:"1px solid #e8e8e8" }}>
+                <span style={{ fontSize:12, color:"#666", whiteSpace:"nowrap" }}>월별 관리</span>
+                <select value={exportMonthSel || months[0]} onChange={e => setExportMonthSel(e.target.value)} style={{ flex:1, minWidth:96, padding:"7px 8px", fontSize:13, border:"1px solid #ddd", borderRadius:6 }}>
+                  {months.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <button onClick={() => exportMonth(exportMonthSel || months[0])} style={{ padding:"7px 10px", fontSize:12, background:"#1a73e8", color:"#fff", border:"none", borderRadius:6, cursor:"pointer", whiteSpace:"nowrap" }}>⬇ ZIP</button>
+                <button onClick={() => deleteMonth(exportMonthSel || months[0])} style={{ padding:"7px 10px", fontSize:12, background:"none", color:"#ea4335", border:"1px solid #ea4335", borderRadius:6, cursor:"pointer", whiteSpace:"nowrap" }}>월 삭제</button>
+              </div>
+            )}
             {history.filter(h => histFilter==="전체" || h.site===histFilter).length===0 && <div style={{ textAlign:"center", color:"#aaa", padding:"40px 0", fontSize:14 }}>저장된 일지가 없습니다</div>}
             {history.filter(h => histFilter==="전체" || h.site===histFilter).map(h => {
               const tot = h.rows?.reduce((s,r) => s+(parseInt(r.workers)||0),0)||0;
@@ -444,8 +550,15 @@ export default function App() {
                   <div style={{ fontSize:12, color:"#888", marginBottom:2 }}>{h.site}</div>
                   <div style={{ fontSize:13, color:"#555", marginBottom:8 }}>총 {tot}명{h.weather?` · ${h.weather}`:""}</div>
                   {h.mainWork && <div style={{ fontSize:12, color:"#888", marginBottom:8, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h.mainWork.slice(0,40)}</div>}
+                  {(h.files?.rosterPng || h.files?.tbmPng) && (
+                    <div style={{ display:"flex", gap:6, marginBottom:6, flexWrap:"wrap" }}>
+                      {h.files?.rosterPng && <button style={{ flex:1, minWidth:120, padding:"6px 0", fontSize:12, background:"#f5f0ff", color:"#6f42c1", border:"none", borderRadius:6, cursor:"pointer" }} onClick={() => openArtifact(h.id, "rosterPng", "rosterPdf", `출력일보_${h.date}`)}>🖼️ 출력일보</button>}
+                      {h.files?.tbmPng && <button style={{ flex:1, minWidth:120, padding:"6px 0", fontSize:12, background:"#f0fff4", color:"#34a853", border:"none", borderRadius:6, cursor:"pointer" }} onClick={() => openArtifact(h.id, "tbmPng", "tbmPdf", `안전교육일지_${h.date}`)}>🖼️ 안전교육일지</button>}
+                    </div>
+                  )}
                   <div style={{ display:"flex", gap:6 }}>
                     <button style={{ flex:1, padding:"7px 0", fontSize:13, background:"#f0f4ff", color:"#1a73e8", border:"none", borderRadius:6, cursor:"pointer" }} onClick={() => loadEntry(h)}>불러오기</button>
+                    <button style={{ padding:"7px 10px", fontSize:13, background:"#eef7ee", color:"#188038", border:"none", borderRadius:6, cursor:"pointer" }} title="이 날짜 ZIP 내보내기" onClick={() => exportDay(h)}>⬇</button>
                     <button style={{ padding:"7px 12px", fontSize:13, background:"none", color:"#ea4335", border:"1px solid #ea4335", borderRadius:6, cursor:"pointer" }} onClick={() => deleteEntry(h.id)}>삭제</button>
                   </div>
                 </div>
@@ -485,7 +598,8 @@ export default function App() {
               </div>
               <div style={{ display:"flex", gap:8, marginTop:10 }}>
                 <button style={c.sb("none","#666")} onClick={() => setPreview(null)}>닫기</button>
-                <button style={c.sb("#6f42c1","#fff")} onClick={handleSavePreview}>저장</button>
+                {preview.allowPdf && <button style={c.sb("none","#ff6d00")} onClick={handlePdfFromPreview}>PDF 저장</button>}
+                <button style={c.sb("#6f42c1","#fff")} onClick={handleSavePreview}>이미지 저장</button>
               </div>
             </div>
           </div>

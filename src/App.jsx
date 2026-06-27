@@ -53,6 +53,8 @@ export default function App() {
   const [showOutput, setShowOutput] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
   const [showTBM, setShowTBM] = useState(false);
+  const [openRoster, setOpenRoster] = useState(true);
+  const [openTbm, setOpenTbm] = useState(true);
   const [photos, setPhotos] = useState([]);
   const [tbm, setTbm] = useState({ subject:"", s1_1:"", s1_2:"", s1_3:"", s2_1:"", s2_2:"", s2_3:"", s3_1:"", s3_2:"", s3_3:"" });
   const photoRef = useRef();
@@ -315,7 +317,8 @@ export default function App() {
             </div>
 
               <div style={{ ...c.card, border:"1px solid #6f42c1", background:"#f8f5ff", marginTop:4 }}>
-                <div style={{ ...c.ct, color:"#6f42c1" }}>🧾 출력점검 및 노무비 일계표 - 출력명부</div>
+                <div onClick={() => setOpenRoster(v=>!v)} style={{ ...c.ct, color:"#6f42c1", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:openRoster?12:0 }}><span>🧾 출력점검 및 노무비 일계표 - 출력명부</span><span style={{ fontSize:13 }}>{openRoster?"▾":"▸"}</span></div>
+                {openRoster && (<>
                 <div style={c.g2}>
                   <div><label style={c.lbl}>업체명</label><input style={c.ti} value={rosterMeta.company} onChange={e => setRM("company", e.target.value)} /></div>
                   <div><label style={c.lbl}>공종명</label><input style={c.ti} value={rosterMeta.workType} onChange={e => setRM("workType", e.target.value)} /></div>
@@ -348,6 +351,7 @@ export default function App() {
                 </div>
 
                 <button style={c.btn("#6f42c1","#fff")} onClick={handleDownloadRosterImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 출력명부 사진(이미지)으로 저장"}</button>
+                </>)}
               </div>
 
 
@@ -379,7 +383,8 @@ export default function App() {
 
             {showTBM && (
               <div style={{ ...c.card, border:"1px solid #34a853", background:"#f0fff4", marginTop:4 }}>
-                <div style={{ ...c.ct, color:"#34a853" }}>📋 안전교육일지 입력</div>
+                <div onClick={() => setOpenTbm(v=>!v)} style={{ ...c.ct, color:"#34a853", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:openTbm?12:0 }}><span>📋 안전교육일지 입력</span><span style={{ fontSize:13 }}>{openTbm?"▾":"▸"}</span></div>
+                {openTbm && (<>
                 <label style={c.lbl}>교육주제</label>
                 <input style={c.ti} value={tbm.subject} onChange={e => setT("subject",e.target.value)} />
                 <div style={{ fontWeight:600, fontSize:13, color:"#333", margin:"8px 0 6px" }}>1. 당일작업의 공법이해</div>
@@ -418,6 +423,7 @@ export default function App() {
                 )}
                 <button style={c.btn("#6f42c1","#fff")} onClick={handleDownloadTbmImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 안전교육일지 사진(이미지)으로 저장"}</button>
                 <button style={c.btn("#ff6d00","#fff")} onClick={handlePrint}>🖨️ PDF 출력</button>
+                </>)}
               </div>
             )}
 

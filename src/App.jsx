@@ -113,7 +113,7 @@ export default function App() {
     setTbm({
       subject: names.join(", ") + " 작업",
       s1_1: `자재 야적 시 신호수 배치 후 ${names.join(", ")} 시공작업 부위 확인`,
-      s1_2: state.mainWork || `${names.join(", ")} 작업`,
+      s1_2: [...new Set(roster.map(r => (r.work||"").trim()).filter(Boolean))].join(", "),
       s1_3: active.map(r => `${r.name} ${r.workers}명`).join(", "),
       s2_1: tpls.map(t => t.s2_1).join("\n"),
       s2_2: tpls.map(t => t.s2_2).join("\n"),

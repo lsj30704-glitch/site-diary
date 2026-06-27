@@ -390,8 +390,8 @@ export default function App() {
         </div>
 
         <div style={c.tabs}>
-          <button style={c.tab(tab==="write")} onClick={() => setTab("write")}>작성</button>
-          <button style={c.tab(tab==="history")} onClick={() => setTab("history")}>저장목록({history.length})</button>
+          <button style={c.tab(tab==="write")} onClick={() => setTab("write")}>✍️ 작성</button>
+          <button style={c.tab(tab==="history")} onClick={() => setTab("history")}>📁 보관함({history.length})</button>
           <button style={c.tab(tab==="settings")} onClick={() => setTab("settings")}>⚙️설정</button>
         </div>
 
@@ -526,6 +526,10 @@ export default function App() {
           </>}
 
           {tab==="history" && <>
+            <div style={{ marginBottom:12, paddingBottom:10, borderBottom:"2px solid #e8e8e8" }}>
+              <div style={{ fontSize:16, fontWeight:700, color:"#1a73e8" }}>📁 완료 기록 보관함</div>
+              <div style={{ fontSize:12, color:"#888", marginTop:3, lineHeight:1.5 }}>작성·저장이 끝난 일지와 결과물(이미지·PDF)을 모아둔 곳이에요. 불러오기 · 내보내기(ZIP) · 월별/개별 삭제가 가능합니다.</div>
+            </div>
             <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:12 }}>
               {["전체", ...sites].map(s => (
                 <button key={s} onClick={() => setHistFilter(s)} style={{ fontSize:12, padding:"5px 10px", borderRadius:16, border:"1px solid", borderColor:histFilter===s?"#1a73e8":"#ddd", background:histFilter===s?"#e8f0fe":"#fff", color:histFilter===s?"#1a73e8":"#666", cursor:"pointer" }}>{s}</button>

@@ -61,6 +61,7 @@ export default function App() {
   const [showRoster, setShowRoster] = useState(false);
   const [imgBusy, setImgBusy] = useState(false);
   const rosterPrintRef = useRef();
+  const tbmPrintRef = useRef();
 
   const set = (f, v) => setState(prev => ({ ...prev, [f]: v }));
   const setT = (f, v) => setTbm(prev => ({ ...prev, [f]: v }));
@@ -192,6 +193,28 @@ export default function App() {
       const canvas = await html2canvas(node, { scale:2, backgroundColor:"#ffffff", useCORS:true });
       const link = document.createElement("a");
       link.download = `출력명부_${state.date}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (err) {
+      alert("이미지 다운로드 중 오류가 발생했습니다.");
+    } finally {
+      node.style.display = prevDisplay;
+      setImgBusy(false);
+    }
+  };
+
+  // 안전교육일지 PNG 저장 — 출력명부 이미지 다운로드와 동일한 방식(서식 변경 없음, 기존 PDF는 그대로)
+  const handleDownloadTbmImage = async () => {
+    if (!tbmPrintRef.current) return;
+    setImgBusy(true);
+    const node = tbmPrintRef.current;
+    const prevDisplay = node.style.display;
+    node.style.display = "block";
+    try {
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(node, { scale:2, backgroundColor:"#ffffff", useCORS:true });
+      const link = document.createElement("a");
+      link.download = `안전교육일지_${state.date}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     } catch (err) {
@@ -392,6 +415,7 @@ export default function App() {
                     ))}
                   </div>
                 )}
+                <button style={c.btn("#6f42c1","#fff")} onClick={handleDownloadTbmImage} disabled={imgBusy}>{imgBusy?"이미지 생성 중...":"🖼️ 안전교육일지 사진(이미지)으로 저장"}</button>
                 <button style={c.btn("#ff6d00","#fff")} onClick={handlePrint}>🖨️ PDF 출력</button>
               </div>
             )}
@@ -447,7 +471,7 @@ export default function App() {
       </div>
 
       {/* ── 인쇄 전용 A4 ── */}
-      <div className="print-only print-tbm" style={{ fontFamily:"'Malgun Gothic','맑은 고딕',sans-serif", fontSize:11, padding:"15mm 18mm", background:"#fff", minHeight:"297mm", width:"210mm" }}>
+      <div className="print-only print-tbm" ref={tbmPrintRef} style={{ fontFamily:"'Malgun Gothic','맑은 고딕',sans-serif", fontSize:11, padding:"15mm 18mm", background:"#fff", minHeight:"297mm", width:"210mm" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"4mm" }}>
           <div style={{ flex:1, textAlign:"center", fontSize:16, fontWeight:700, letterSpacing:4, padding:"6mm 0 4mm", whiteSpace:"nowrap" }}>일상 안전교육일지</div>
           <table style={{ borderCollapse:"collapse" }}>

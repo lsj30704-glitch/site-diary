@@ -60,6 +60,7 @@ export default function App() {
   const [rosterMeta, setRosterMeta] = useState(() => loadRosterMeta());
   const [showRoster, setShowRoster] = useState(false);
   const [imgBusy, setImgBusy] = useState(false);
+  const [preview, setPreview] = useState(null);
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
 
@@ -182,48 +183,48 @@ export default function App() {
   };
   const deleteEntry = id => { const u = history.filter(h => h.id!==id); setHistory(u); saveHistory(u); };
 
-  const handleDownloadRosterImage = async () => {
-    if (!rosterPrintRef.current) return;
+  // PNG: 캡처 → 미리보기 모달 (안전교육일지/출력명부 공통)
+  const captureToPreview = async (node, filename) => {
+    if (!node) return;
     setImgBusy(true);
-    const node = rosterPrintRef.current;
     const prevDisplay = node.style.display;
     node.style.display = "block";
     try {
       const { default: html2canvas } = await import("html2canvas");
       const canvas = await html2canvas(node, { scale:2, backgroundColor:"#ffffff", useCORS:true });
-      const link = document.createElement("a");
-      link.download = `출력명부_${state.date}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+      setPreview({ url: canvas.toDataURL("image/png"), filename });
     } catch (err) {
-      alert("이미지 다운로드 중 오류가 발생했습니다.");
+      alert("이미지 생성 중 오류가 발생했습니다.");
     } finally {
       node.style.display = prevDisplay;
       setImgBusy(false);
     }
   };
+  // 미리보기 '저장': 안드로이드 등은 Web Share(파일)로 갤러리 저장, 미지원 시 다운로드 폴백
+  const handleSavePreview = async () => {
+    if (!preview) return;
+    try {
+      const blob = await (await fetch(preview.url)).blob();
+      const file = new File([blob], preview.filename, { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+        await navigator.share({ files: [file], title: preview.filename });
+        setPreview(null);
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return; // 사용자가 공유 취소 → 미리보기 유지
+      // 그 외 오류는 아래 다운로드로 폴백
+    }
+    const link = document.createElement("a");
+    link.download = preview.filename;
+    link.href = preview.url;
+    link.click();
+    setPreview(null);
+  };
+  const handleDownloadRosterImage = () => captureToPreview(rosterPrintRef.current, `출력명부_${state.date}.png`);
 
-  // 안전교육일지 PNG 저장 — 출력명부 이미지 다운로드와 동일한 방식(서식 변경 없음, 기존 PDF는 그대로)
-  const handleDownloadTbmImage = async () => {
-    if (!tbmPrintRef.current) return;
-    setImgBusy(true);
-    const node = tbmPrintRef.current;
-    const prevDisplay = node.style.display;
-    node.style.display = "block";
-    try {
-      const { default: html2canvas } = await import("html2canvas");
-      const canvas = await html2canvas(node, { scale:2, backgroundColor:"#ffffff", useCORS:true });
-      const link = document.createElement("a");
-      link.download = `안전교육일지_${state.date}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    } catch (err) {
-      alert("이미지 다운로드 중 오류가 발생했습니다.");
-    } finally {
-      node.style.display = prevDisplay;
-      setImgBusy(false);
-    }
-  };
+  // 안전교육일지 PNG 저장 — 출력명부와 동일한 미리보기+갤러리저장 흐름(서식·기존 PDF 미변경)
+  const handleDownloadTbmImage = () => captureToPreview(tbmPrintRef.current, `안전교육일지_${state.date}.png`);
 
   const outputText = () => [
     `📋 일일 현장업무일지`, `━━━━━━━━━━━━━━━━━━━━━━`,
@@ -468,6 +469,21 @@ export default function App() {
           </>}
         </div>
         {(savedMsg||copied) && <div style={c.msg}>{savedMsg||"복사됨!"}</div>}
+
+        {preview && (
+          <div onClick={() => setPreview(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.72)", zIndex:200, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background:"#fff", borderRadius:12, padding:12, width:"100%", maxWidth:440, maxHeight:"88vh", display:"flex", flexDirection:"column" }}>
+              <div style={{ fontSize:13, color:"#666", margin:"2px 0 8px", textAlign:"center" }}>미리보기 · '저장'을 누르면 갤러리(사진)에 저장됩니다</div>
+              <div style={{ overflow:"auto", flex:1, border:"1px solid #eee", borderRadius:8, background:"#fafafa" }}>
+                <img src={preview.url} style={{ width:"100%", display:"block" }} alt="미리보기" />
+              </div>
+              <div style={{ display:"flex", gap:8, marginTop:10 }}>
+                <button style={c.sb("none","#666")} onClick={() => setPreview(null)}>닫기</button>
+                <button style={c.sb("#6f42c1","#fff")} onClick={handleSavePreview}>저장</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── 인쇄 전용 A4 ── */}

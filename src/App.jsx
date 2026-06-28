@@ -51,6 +51,77 @@ const fmtDate = d => { const dt = new Date(d); return `${dt.getFullYear()} 년 $
 const defaultRosterRow = () => ({ id: UID(), no:"", job:"", name:"", am:"", pm:"", night:"", work:"", note:"" });
 const rTotal = r => { const n = v => parseFloat(v)||0; const t = n(r.am)+n(r.pm)+n(r.night); return t ? (Number.isInteger(t)?t:t.toFixed(1)) : ""; };
 
+// 미리보기용 핀치 줌/팬/더블탭 이미지 — 모바일 터치 기준 (touch-action:none)
+function ZoomableImage({ src }) {
+  const wrapRef = useRef(null);
+  const imgRef = useRef(null);
+  const st = useRef({ scale:1, tx:0, ty:0, mode:null, startDist:0, startScale:1, midX:0, midY:0, baseTx:0, baseTy:0, lastX:0, lastY:0, tapX:0, tapY:0, tapAt:0, lastTap:0 });
+
+  const apply = () => { const i = imgRef.current; if (i) i.style.transform = `translate(${st.current.tx}px, ${st.current.ty}px) scale(${st.current.scale})`; };
+  const clamp = () => {
+    const w = wrapRef.current, i = imgRef.current; if (!w || !i) return;
+    const cw = w.clientWidth, ch = w.clientHeight, iw = i.offsetWidth * st.current.scale, ih = i.offsetHeight * st.current.scale;
+    let minX, maxX, minY, maxY;
+    if (iw <= cw) { minX = maxX = (cw - iw) / 2; } else { minX = cw - iw; maxX = 0; }
+    if (ih <= ch) { minY = maxY = (ch - ih) / 2; } else { minY = ch - ih; maxY = 0; }
+    st.current.tx = Math.min(maxX, Math.max(minX, st.current.tx));
+    st.current.ty = Math.min(maxY, Math.max(minY, st.current.ty));
+  };
+  const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const rel = (x, y) => { const r = wrapRef.current.getBoundingClientRect(); return [x - r.left, y - r.top]; };
+  const zoomTo = (ns, fx, fy) => {
+    ns = Math.min(6, Math.max(1, ns));
+    st.current.tx = fx - (fx - st.current.tx) * (ns / st.current.scale);
+    st.current.ty = fy - (fy - st.current.ty) * (ns / st.current.scale);
+    st.current.scale = ns; clamp(); apply();
+  };
+
+  const onStart = e => {
+    const t = e.touches;
+    if (t.length === 2) {
+      st.current.mode = "pinch"; st.current.startDist = dist(t); st.current.startScale = st.current.scale;
+      const [mx, my] = rel((t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
+      st.current.midX = mx; st.current.midY = my; st.current.baseTx = st.current.tx; st.current.baseTy = st.current.ty;
+    } else if (t.length === 1) {
+      st.current.mode = "pan"; st.current.lastX = t[0].clientX; st.current.lastY = t[0].clientY;
+      st.current.tapX = t[0].clientX; st.current.tapY = t[0].clientY; st.current.tapAt = Date.now();
+    }
+  };
+  const onMove = e => {
+    const t = e.touches;
+    if (st.current.mode === "pinch" && t.length === 2) {
+      const ns = Math.min(6, Math.max(1, st.current.startScale * (dist(t) / (st.current.startDist || 1))));
+      const k = ns / st.current.startScale;
+      st.current.tx = st.current.midX - (st.current.midX - st.current.baseTx) * k;
+      st.current.ty = st.current.midY - (st.current.midY - st.current.baseTy) * k;
+      st.current.scale = ns; clamp(); apply();
+    } else if (st.current.mode === "pan" && t.length === 1) {
+      st.current.tx += t[0].clientX - st.current.lastX; st.current.ty += t[0].clientY - st.current.lastY;
+      st.current.lastX = t[0].clientX; st.current.lastY = t[0].clientY; clamp(); apply();
+    }
+  };
+  const onEnd = e => {
+    if (e.touches.length > 0) return;
+    const ct = e.changedTouches[0], now = Date.now();
+    const moved = ct ? Math.hypot(ct.clientX - st.current.tapX, ct.clientY - st.current.tapY) : 99;
+    const wasTap = st.current.mode === "pan" && moved < 10 && now - st.current.tapAt < 300;
+    if (wasTap && now - st.current.lastTap < 300) {
+      if (st.current.scale > 1.05) { st.current.scale = 1; st.current.tx = 0; st.current.ty = 0; clamp(); apply(); }
+      else { const [fx, fy] = rel(ct.clientX, ct.clientY); zoomTo(2.5, fx, fy); }
+      st.current.lastTap = 0;
+    } else if (wasTap) { st.current.lastTap = now; } else { st.current.lastTap = 0; }
+    st.current.mode = null;
+  };
+
+  return (
+    <div ref={wrapRef} onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}
+      style={{ overflow:"hidden", flex:1, border:"1px solid #eee", borderRadius:8, background:"#fafafa", touchAction:"none", position:"relative" }}>
+      <img ref={imgRef} src={src} draggable={false} alt="미리보기"
+        style={{ width:"100%", display:"block", transformOrigin:"0 0", willChange:"transform", userSelect:"none", WebkitUserSelect:"none" }} />
+    </div>
+  );
+}
+
 export default function App() {
   // 앱을 열면(작성 시작) 항상 오늘 날짜가 보이도록 — 작성 중이던 다른 내용은 그대로 유지
   const [state, setState] = useState(() => { const s = load(); return s ? { ...s, date: TODAY() } : defaultState(); });
@@ -596,10 +667,8 @@ export default function App() {
         {preview && (
           <div onClick={() => setPreview(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.72)", zIndex:200, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
             <div onClick={e => e.stopPropagation()} style={{ background:"#fff", borderRadius:12, padding:12, width:"100%", maxWidth:440, maxHeight:"88vh", display:"flex", flexDirection:"column" }}>
-              <div style={{ fontSize:13, color:"#666", margin:"2px 0 8px", textAlign:"center" }}>미리보기 · '저장'을 누르면 갤러리(사진)에 저장됩니다</div>
-              <div style={{ overflow:"auto", flex:1, border:"1px solid #eee", borderRadius:8, background:"#fafafa" }}>
-                <img src={preview.url} style={{ width:"100%", display:"block" }} alt="미리보기" />
-              </div>
+              <div style={{ fontSize:13, color:"#666", margin:"2px 0 8px", textAlign:"center" }}>미리보기 · 두 손가락으로 확대/축소, 더블탭 확대, 끌어서 이동 · '이미지 저장'은 갤러리에 저장</div>
+              <ZoomableImage key={preview.url} src={preview.url} />
               <div style={{ display:"flex", gap:8, marginTop:10 }}>
                 <button style={c.sb("none","#666")} onClick={() => setPreview(null)}>닫기</button>
                 {preview.allowPdf && <button style={c.sb("none","#ff6d00")} onClick={handlePdfFromPreview}>PDF 저장</button>}

@@ -144,6 +144,7 @@ export default function App() {
   const [showRoster, setShowRoster] = useState(false);
   const [imgBusy, setImgBusy] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [shareView, setShareView] = useState(null);
   const [exportMonthSel, setExportMonthSel] = useState("");
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
@@ -395,16 +396,41 @@ export default function App() {
   // 안전교육일지 PNG 저장 — 출력명부와 동일한 미리보기+갤러리저장 흐름(서식·기존 PDF 미변경)
   const handleDownloadTbmImage = () => captureToPreview(tbmPrintRef.current, `안전교육일지_${state.date}.png`);
 
-  const outputText = () => [
-    `📋 일일 현장업무일지`, `━━━━━━━━━━━━━━━━━━━━━━`,
-    `📅 날짜: ${state.date}`, `🏗️ 현장: ${state.site}`, `👷 현장소장: ${state.manager}`,
-    state.weather ? `🌤️ 날씨: ${state.weather}` : null, ``,
-    `【 공정별 출력인원 】`,
-    ...state.rows.filter(r => r.name).map(r => `▪ ${r.name}: ${r.workers||0}명${r.work?` / ${r.work}`:""}${r.note?` (${r.note})`:""}`),
-    `▶ 합계: 총 ${totalWorkers}명`,
-    state.mainWork ? `\n【 주요 업무 】\n${state.mainWork}` : null,
-    state.special ? `\n【 특이사항/지시사항 】\n${state.special}` : null,
-  ].filter(Boolean).join("\n");
+  // 출력명부(작업내용·비고)에서 'N동'을 자동 추출해 직종→동별 인원으로 집계
+  const dongLines = (rosterArr) => {
+    const groups = new Map();
+    (rosterArr || []).forEach(r => {
+      const job = (r.job || "").trim();
+      if (!job) return;
+      const m = `${r.work||""} ${r.note||""}`.match(/(\d+)\s*동/);
+      const dong = m ? `${m[1]}동` : "동미상";
+      if (!groups.has(job)) groups.set(job, new Map());
+      const dm = groups.get(job);
+      dm.set(dong, (dm.get(dong) || 0) + 1);
+    });
+    const lines = []; let total = 0;
+    for (const [job, dm] of groups) {
+      lines.push(job);
+      const ents = [...dm.entries()].sort((a,b) => a[0]==="동미상" ? 1 : b[0]==="동미상" ? -1 : parseInt(a[0])-parseInt(b[0]));
+      ents.forEach(([dong,cnt]) => { lines.push(`${dong} ${cnt}명`); total += cnt; });
+    }
+    return { lines, total };
+  };
+  const shareTextFrom = (e) => {
+    const { lines, total } = dongLines(e.roster);
+    const body = lines.length
+      ? [`【 공정·동별 출력인원 】`, ...lines, `▶ 합계: 총 ${total}명`]
+      : [`【 공정별 출력인원 】`, ...(e.rows||[]).filter(r => r.name).map(r => `▪ ${r.name}: ${r.workers||0}명${r.work?` / ${r.work}`:""}${r.note?` (${r.note})`:""}`), `▶ 합계: 총 ${(e.rows||[]).reduce((s,r)=>s+(parseInt(r.workers)||0),0)}명`];
+    return [
+      `📋 일일 현장업무일지`, `━━━━━━━━━━━━━━━━━━━━━━`,
+      `📅 날짜: ${e.date}`, `🏗️ 현장: ${e.site}`, `👷 현장소장: ${e.manager}`,
+      e.weather ? `🌤️ 날씨: ${e.weather}` : null, ``,
+      ...body,
+      e.mainWork ? `\n【 주요 업무 】\n${e.mainWork}` : null,
+      e.special ? `\n【 특이사항/지시사항 】\n${e.special}` : null,
+    ].filter(Boolean).join("\n");
+  };
+  const outputText = () => shareTextFrom({ date: state.date, site: state.site, manager: state.manager, weather: state.weather, roster, rows: state.rows, mainWork: state.mainWork, special: state.special });
 
   const c = {
     wrap: { maxWidth:480, margin:"0 auto", paddingBottom:80, fontFamily:"-apple-system,BlinkMacSystemFont,'Noto Sans KR',sans-serif", color:"#1a1a1a" },
@@ -631,6 +657,9 @@ export default function App() {
                       {h.files?.tbmPng && <button style={{ flex:1, minWidth:120, padding:"6px 0", fontSize:12, background:"#f0fff4", color:"#34a853", border:"none", borderRadius:6, cursor:"pointer" }} onClick={() => openArtifact(h.id, "tbmPng", "tbmPdf", `안전교육일지_${h.date}`)}>🖼️ 안전교육일지</button>}
                     </div>
                   )}
+                  <div style={{ display:"flex", gap:6, marginBottom:6, flexWrap:"wrap" }}>
+                    <button style={{ flex:1, minWidth:120, padding:"6px 0", fontSize:12, background:"#e8f0fe", color:"#1a73e8", border:"none", borderRadius:6, cursor:"pointer" }} onClick={() => setShareView(shareTextFrom(h))}>📤 밴드/카톡 공유</button>
+                  </div>
                   <div style={{ display:"flex", gap:6 }}>
                     <button style={{ flex:1, padding:"7px 0", fontSize:13, background:"#f0f4ff", color:"#1a73e8", border:"none", borderRadius:6, cursor:"pointer" }} onClick={() => loadEntry(h)}>불러오기</button>
                     <button style={{ padding:"7px 10px", fontSize:13, background:"#eef7ee", color:"#188038", border:"none", borderRadius:6, cursor:"pointer" }} title="이 날짜 ZIP 내보내기" onClick={() => exportDay(h)}>⬇</button>
@@ -673,6 +702,19 @@ export default function App() {
                 <button style={c.sb("none","#666")} onClick={() => setPreview(null)}>닫기</button>
                 {preview.allowPdf && <button style={c.sb("none","#ff6d00")} onClick={handlePdfFromPreview}>PDF 저장</button>}
                 <button style={c.sb("#6f42c1","#fff")} onClick={handleSavePreview}>이미지 저장</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {shareView && (
+          <div onClick={() => setShareView(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.72)", zIndex:200, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background:"#fff", borderRadius:12, padding:14, width:"100%", maxWidth:440, maxHeight:"88vh", display:"flex", flexDirection:"column" }}>
+              <div style={{ fontSize:14, fontWeight:600, color:"#1a73e8", marginBottom:8 }}>📤 밴드/카톡 공유용</div>
+              <div style={{ ...c.ob, overflow:"auto", flex:1 }}>{shareView}</div>
+              <div style={{ display:"flex", gap:8, marginTop:10 }}>
+                <button style={c.sb("none","#666")} onClick={() => setShareView(null)}>닫기</button>
+                <button style={c.sb("#1a73e8","#fff")} onClick={() => { navigator.clipboard.writeText(shareView).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}>{copied?"✓ 복사됨!":"📋 클립보드 복사"}</button>
               </div>
             </div>
           </div>

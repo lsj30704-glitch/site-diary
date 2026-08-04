@@ -207,6 +207,7 @@ export default function App() {
   const [memberEdit, setMemberEdit] = useState({}); // 소속 인원 입력 중 원문 유지
   const [statQuery, setStatQuery] = useState("");
   const [statAll, setStatAll] = useState(false);
+  const [teamOpen, setTeamOpen] = useState({}); // 출역집계 팀별 펼침
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
 
@@ -1147,15 +1148,19 @@ export default function App() {
                     총 {fmtNum(j.gongsu)}공수{j.night ? ` · 야간 ${j.night}` : ""}
                   </span>
                 </div>
-                {j.teams.map(tg => (<div key={tg.team}>
-                <div style={{ display:"flex", alignItems:"baseline", gap:6, margin:"12px 0 2px", padding:"5px 8px", background:"#f3efff", borderRadius:6 }}>
-                  <span style={{ fontSize:13, fontWeight:600, color:"#6f42c1" }}>{tg.team}</span>
+                {j.teams.map(tg => { const tkey = `${j.job}|${tg.team}`; const topen = !!teamOpen[tkey]; return (<div key={tg.team}>
+                <div onClick={() => setTeamOpen(prev => ({ ...prev, [tkey]: !prev[tkey] }))}
+                  style={{ display:"flex", alignItems:"center", gap:6, margin:"12px 0 2px", padding:"9px 10px", background: topen ? "#ebe4ff" : "#f3efff", borderRadius:6, cursor:"pointer" }}>
+                  <span style={{ fontSize:14, fontWeight:700, color:"#6f42c1" }}>{tg.team}</span>
                   <span style={{ fontSize:11, color:"#9b8bbd" }}>{tg.people.length}명</span>
-                  <span style={{ marginLeft:"auto", fontSize:12, fontWeight:600, color:"#6f42c1" }}>
+                  <span style={{ marginLeft:"auto", fontSize:14, fontWeight:700, color:"#6f42c1" }}>
                     {fmtNum(tg.gongsu)}공수{tg.night ? ` · 야간 ${tg.night}` : ""}
                   </span>
+                  <span style={{ fontSize:11, color:"#6f42c1", border:"1px solid #c7b6f5", borderRadius:10, padding:"2px 8px", whiteSpace:"nowrap" }}>
+                    {topen ? "접기 ▾" : "자세히 ▸"}
+                  </span>
                 </div>
-                {tg.people.map(pp => {
+                {topen && tg.people.map(pp => {
                   const key = `${j.job}|${tg.team}|${pp.name}`;
                   const open = statOpen === key;
                   return (
@@ -1181,7 +1186,7 @@ export default function App() {
                     </div>
                   );
                 })}
-                </div>))}
+                </div>); })}
               </div>
             ))}
 

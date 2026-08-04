@@ -864,9 +864,9 @@ export default function App() {
                     <div style={{ display:"flex", gap:6, marginBottom:6 }}>
                       {[["am","오전"],["pm","오후"],["night","야간"]].map(([f,lb]) => (
                         <label key={f} style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:5, padding:"8px 0", fontSize:13,
-                          border:`1px solid ${isOn(r[f]) ? "#6f42c1" : "#ddd"}`, borderRadius:6, cursor:"pointer",
+                          border:`1px solid ${isOn(r[f]) ? "#6f42c1" : "#ddd"}`, borderRadius:6, cursor:"pointer", whiteSpace:"nowrap", minWidth:0,
                           background: isOn(r[f]) ? "#f3efff" : "#fff", color: isOn(r[f]) ? "#6f42c1" : "#888", fontWeight: isOn(r[f]) ? 600 : 400 }}>
-                          <input type="checkbox" checked={isOn(r[f])} onChange={e => updateRosterRow(r.id, f, e.target.checked ? "1" : "")} style={{ margin:0 }} />
+                          <input type="checkbox" checked={isOn(r[f])} onChange={e => updateRosterRow(r.id, f, e.target.checked ? "1" : "")} style={{ margin:0, width:15, height:15, flexShrink:0 }} />
                           {lb}
                         </label>
                       ))}
@@ -1252,9 +1252,9 @@ export default function App() {
                       <div style={{ display:"flex", gap:6, marginBottom:12 }}>
                         {[["am","오전"],["pm","오후"],["night","야간"]].map(([f,lb]) => (
                           <label key={f} style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:5, padding:"8px 0", fontSize:13,
-                            border:`1px solid ${g[f] ? "#6f42c1" : "#ddd"}`, borderRadius:6, cursor:"pointer",
+                            border:`1px solid ${g[f] ? "#6f42c1" : "#ddd"}`, borderRadius:6, cursor:"pointer", whiteSpace:"nowrap", minWidth:0,
                             background: g[f] ? "#f3efff" : "#fff", color: g[f] ? "#6f42c1" : "#888", fontWeight: g[f] ? 600 : 400 }}>
-                            <input type="checkbox" checked={!!g[f]} onChange={e => updGroup(g.id, f, e.target.checked)} style={{ margin:0 }} />
+                            <input type="checkbox" checked={!!g[f]} onChange={e => updGroup(g.id, f, e.target.checked)} style={{ margin:0, width:15, height:15, flexShrink:0 }} />
                             {lb}
                           </label>
                         ))}

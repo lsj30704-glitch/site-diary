@@ -205,6 +205,8 @@ export default function App() {
   const [statMonth, setStatMonth] = useState("");
   const [statOpen, setStatOpen] = useState("");
   const [memberEdit, setMemberEdit] = useState({}); // 소속 인원 입력 중 원문 유지
+  const [statQuery, setStatQuery] = useState("");
+  const [statAll, setStatAll] = useState(false);
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
 
@@ -282,6 +284,37 @@ export default function App() {
     out.sort((a,b) => b.gongsu - a.gongsu);
     return { ym, entries: entries.length, jobs: out };
   }, [history, statMonth, statMonths]);
+
+  // 이름 검색 — 같은 이름이면 팀이 달라도 한 사람으로 합치고, 팀별 내역을 따로 보여준다
+  const personHits = useMemo(() => {
+    const q = statQuery.trim();
+    if (!q) return [];
+    const ym = statMonth || statMonths[0] || "";
+    const src = statAll ? history : history.filter(h => String(h.date||"").startsWith(ym));
+    const map = new Map();
+    src.forEach(h => (h.roster||[]).forEach(r => {
+      const name = String(r.name||"").trim();
+      if (!name || !name.includes(q)) return;
+      if (!map.has(name)) map.set(name, { name, jobs: new Set(), teams: new Map(), days: new Set(), gongsu: 0, night: 0, recs: [] });
+      const e = map.get(name);
+      const job = String(r.job||"").trim() || "직종 미지정";
+      const team = String(r.team||"").trim() || "팀 미지정";
+      const g = (isOn(r.am) ? 0.5 : 0) + (isOn(r.pm) ? 0.5 : 0);
+      e.jobs.add(job);
+      if (!e.teams.has(team)) e.teams.set(team, { team, days: new Set(), gongsu: 0, night: 0 });
+      const tv = e.teams.get(team);
+      tv.days.add(h.date); tv.gongsu += g; if (isOn(r.night)) tv.night += 1;
+      e.days.add(h.date); e.gongsu += g; if (isOn(r.night)) e.night += 1;
+      e.recs.push({ date: h.date, team, job, am: isOn(r.am), pm: isOn(r.pm), night: isOn(r.night), work: String(r.work||""), site: String(h.site||"") });
+    }));
+    return [...map.values()].map(e => ({
+      ...e,
+      jobs: [...e.jobs],
+      teams: [...e.teams.values()].map(t => ({ ...t, days: t.days.size })).sort((a,b) => b.gongsu - a.gongsu),
+      days: e.days.size,
+      recs: e.recs.sort((a,b) => String(b.date).localeCompare(String(a.date))),
+    })).sort((a,b) => b.days - a.days || a.name.localeCompare(b.name));
+  }, [statQuery, statAll, statMonth, statMonths, history]);
 
   const fmtNum = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
 
@@ -1034,9 +1067,19 @@ export default function App() {
                 <select style={{ ...c.ti, marginBottom:4 }} value={stats.ym} onChange={e => { setStatMonth(e.target.value); setStatOpen(""); }}>
                   {statMonths.map(m => <option key={m} value={m}>{m.replace("-", "년 ")}월</option>)}
                 </select>
-                <div style={{ fontSize:12, color:"#888" }}>
+                <div style={{ fontSize:12, color:"#888", marginBottom:12 }}>
                   저장된 일지 {stats.entries}일 기준 · 오전+오후 = 1공수, 한쪽만 체크 = 0.5공수
                 </div>
+
+                <label style={c.lbl}>이름으로 찾기</label>
+                <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                  <input value={statQuery} onChange={e => setStatQuery(e.target.value)} placeholder="예) 김철" style={{ flex:1, minWidth:0 }} />
+                  {statQuery && <button onClick={() => setStatQuery("")} style={{ padding:"8px 14px", background:"#f1f3f4", color:"#555", border:"none", borderRadius:8, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" }}>지우기</button>}
+                </div>
+                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"#555", cursor:"pointer" }}>
+                  <input type="checkbox" checked={statAll} onChange={e => setStatAll(e.target.checked)} style={{ width:15, height:15, margin:0 }} />
+                  전체 기간에서 찾기 (선택한 달 무시)
+                </label>
               </>) : (
                 <div style={{ fontSize:13, color:"#888", lineHeight:1.6 }}>
                   아직 저장된 일지가 없습니다. 작성 탭에서 일지를 저장하면 이곳에 사람별 출역일수가 쌓입니다.
@@ -1044,7 +1087,58 @@ export default function App() {
               )}
             </div>
 
-            {stats.jobs.map(j => (
+            {statQuery.trim() ? (
+              personHits.length ? personHits.map(pp => (
+                <div key={pp.name} style={c.card}>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:8, paddingBottom:8, borderBottom:"2px solid #1a73e8" }}>
+                    <span style={{ fontSize:17, fontWeight:700 }}>{pp.name}</span>
+                    <span style={{ fontSize:12, color:"#888" }}>{pp.jobs.join(", ")}</span>
+                    <span style={{ marginLeft:"auto", fontSize:14, fontWeight:700, color:"#1a73e8" }}>
+                      {pp.days}일 · {fmtNum(pp.gongsu)}공수{pp.night ? ` · 야간 ${pp.night}` : ""}
+                    </span>
+                  </div>
+
+                  {/* 같은 이름이 여러 팀에 걸쳐 있으면 팀별로 나눠 표시 */}
+                  <div style={{ margin:"10px 0" }}>
+                    {pp.teams.map(tv => (
+                      <div key={tv.team} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", background:"#f3efff", borderRadius:6, marginBottom:4 }}>
+                        <span style={{ fontSize:13, fontWeight:600, color:"#6f42c1" }}>{tv.team}</span>
+                        <span style={{ marginLeft:"auto", fontSize:12, fontWeight:600, color:"#6f42c1" }}>
+                          {tv.days}일 · {fmtNum(tv.gongsu)}공수{tv.night ? ` · 야간 ${tv.night}` : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize:12, color:"#888", marginBottom:4 }}>날짜별 내역 ({pp.recs.length}건)</div>
+                  <div style={{ background:"#fafbff", borderRadius:6, padding:"6px 8px", maxHeight:280, overflowY:"auto" }}>
+                    {pp.recs.map((rc, i) => (
+                      <div key={i} style={{ display:"flex", gap:8, fontSize:12, color:"#555", padding:"5px 0", borderBottom: i < pp.recs.length-1 ? "1px solid #eef0f7" : "none" }}>
+                        <span style={{ width:74, color:"#888", flexShrink:0 }}>{String(rc.date).slice(2)}</span>
+                        <span style={{ width:56, color:"#6f42c1", flexShrink:0, fontSize:11 }}>{[rc.am&&"오전",rc.pm&&"오후",rc.night&&"야간"].filter(Boolean).join("·") || "-"}</span>
+                        <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{rc.work || "-"}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button style={{ ...c.btn("#1a73e8","#fff", 0), marginTop:10 }} onClick={() => {
+                    const L = [`📋 ${pp.name} 출역내역 ${statAll ? "(전체 기간)" : `(${stats.ym})`}`, "━━━━━━━━━━━━━━━━━━━━━━",
+                      `총 ${pp.days}일 · ${fmtNum(pp.gongsu)}공수${pp.night?` · 야간 ${pp.night}`:""}`];
+                    if (pp.teams.length > 1) pp.teams.forEach(tv => L.push(` ▪ ${tv.team} ${tv.days}일 · ${fmtNum(tv.gongsu)}공수`));
+                    L.push("");
+                    pp.recs.forEach(rc => L.push(`${rc.date} ${[rc.am&&"오전",rc.pm&&"오후",rc.night&&"야간"].filter(Boolean).join("·")||"-"} ${rc.work||""}`.trim()));
+                    navigator.clipboard.writeText(L.join("\n")).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+                  }}>📋 {pp.name} 내역 복사</button>
+                </div>
+              )) : (
+                <div style={c.card}>
+                  <div style={{ fontSize:13, color:"#888", lineHeight:1.6 }}>
+                    '{statQuery}' 에 해당하는 사람이 {statAll ? "저장된 일지" : `${stats.ym}`}에 없습니다.
+                    {!statAll && " 아래 '전체 기간에서 찾기'를 켜고 다시 찾아보세요."}
+                  </div>
+                </div>
+              )
+            ) : stats.jobs.map(j => (
               <div key={j.job} style={c.card}>
                 <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:4, paddingBottom:8, borderBottom:"2px solid #1a73e8" }}>
                   <span style={{ fontSize:15, fontWeight:700, color:"#1a73e8" }}>{j.job}</span>
@@ -1091,7 +1185,7 @@ export default function App() {
               </div>
             ))}
 
-            {statMonths.length > 0 && stats.jobs.length > 0 && (
+            {!statQuery.trim() && statMonths.length > 0 && stats.jobs.length > 0 && (
               <button style={c.btn("#1a73e8","#fff")} onClick={() => {
                 const lines = [`📊 ${stats.ym} 출역집계 (일지 ${stats.entries}일)`, "━━━━━━━━━━━━━━━━━━━━━━"];
                 stats.jobs.forEach(j => {

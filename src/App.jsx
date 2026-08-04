@@ -30,7 +30,8 @@ const saveRosterMeta = m => { try { localStorage.setItem(ROSTER_META_KEY, JSON.s
 const DEFAULT_TEAMS = [
   { id: "t1", leader: "엄최림", alias: "최림", team: "석공2팀", job: "석공" },
   { id: "t2", leader: "정연학", alias: "郑然学", team: "석공1팀", job: "석공" },
-  { id: "t3", leader: "배현호", alias: "", team: "비계팀", job: "비계" },
+  { id: "t3", leader: "배현호", alias: "배팀장", team: "비계팀", job: "비계" },
+  { id: "t4", leader: "유정민", alias: "", team: "코킹팀", job: "코킹" },
 ];
 const loadTeams = () => { try { const t = JSON.parse(localStorage.getItem(TEAMS_KEY) || "null"); return (t && t.length) ? t : DEFAULT_TEAMS; } catch { return DEFAULT_TEAMS; } };
 const saveTeams = t => { try { localStorage.setItem(TEAMS_KEY, JSON.stringify(t)); } catch {} };
@@ -42,7 +43,7 @@ const defaultTeamRow = () => ({ id: UID(), leader: "", alias: "", team: "", job:
 // 규칙 3) 직종·사무용어 같은 비이름 단어는 제외
 // 카톡 화면에 섞여 들어오는 시스템 문구·안내문 줄은 통째로 제외
 const LINE_SKIP = /메시지|삭제되었|이모티콘|사진을|동영상|보이스톡|페이스톡|입장하|나갔습니다|초대하|읽지\s*않음|송금|선물하기|채팅방|공지로|답장|전달됨|님이/;
-const NAME_STOP = new Set(["출력","인원","명단","오전","오후","야간","주간","작업","내용","해체","설치","양중","비계","석공","코킹","트러스","미장","도장","배관","전기","철거","금일","오늘","내일","현장","공지","확인","팀장","반장","사장","소장","안녕","수고","시스템","메시지","사진","이모티콘","삭제","전체","합계","총원","기타","오전반","오후반"]);
+const NAME_STOP = new Set(["출력","인원","명단","오전","오후","야간","주간","작업","내용","해체","설치","양중","비계","석공","코킹","트러스","미장","도장","배관","전기","철거","금일","오늘","내일","현장","공지","확인","팀장","반장","사장","소장","안녕","수고","시스템","메시지","사진","이모티콘","삭제","전체","합계","총원","기타","오전반","오후반","오산","롯데","시공","건설","산업","주식","회사","본사","현장","공사","소개","사장","백사장","부장","과장","차장","대리","이사","회장","단톡","카톡","방장","조장","기사","기공","조공","보통","특별","단가","일당"]);
 const parseNames = (text) => {
   const out = [];
   (text || "").split(/\r?\n/).forEach(rawLine => {
@@ -239,24 +240,46 @@ export default function App() {
   // 텍스트 전체를 '보낸사람 → 그 사람이 올린 명단' 묶음으로 분리
   // 규칙: 한 줄이 통째로 등록된 반장 이름/별칭이고 그 팀이 아직 안 열렸으면 → 새 묶음 시작
   //       이미 열린 팀의 이름이면 그 사람도 작업자이므로 이름으로 취급 (예: 최림이 올린 명단 속 '엄최림')
+  // 말풍선 폭 때문에 이름 중간에서 줄이 잘린 경우 되붙임
+  // (예: "...권춘산.정연" / "학.김지남..." → 다음 줄 첫 글자가 1글자면 이어붙임)
+  const glueWrapped = (arr) => {
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      let cur = arr[i];
+      const nxt = arr[i+1];
+      if (nxt && !/[0-9０-９]/.test(nxt) && !LINE_SKIP.test(nxt)) {
+        const head = nxt.split(/[\s,.\/·、|]+/).filter(Boolean)[0] || "";
+        if (/^[가-힣]$/.test(head)) { cur = cur + nxt.trim(); i++; }
+      }
+      out.push(cur);
+    }
+    return out;
+  };
+
   const parseGroups = (text) => {
     const map = senderMap();
+    // 긴 별칭부터 검사 (예: '엄최림'이 '최림'보다 먼저)
+    const keys = [...map.keys()].filter(k => k.length >= 2).sort((a,b) => b.length - a.length);
     const groups = []; const opened = new Set();
     let cur = null;
-    String(text||"").split(/\r?\n/).forEach(raw => {
-      const line = raw.trim();
-      if (!line) return;
-      if (/[0-9０-９]/.test(line)) return;
+    const raw = String(text||"").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    glueWrapped(raw).forEach(line => {
       if (LINE_SKIP.test(line)) return;
-      const key = line.replace(/\s+/g, "");
-      if (map.has(key) && !opened.has(map.get(key))) {
-        const tid = map.get(key);
-        opened.add(tid);
-        cur = emptyGroup(tid, key);
-        groups.push(cur);
-        return;
-      }
+      const compact = line.replace(/\s+/g, "");
       const found = parseNames(line);
+      // 보낸사람 줄 판정: 등록된 반장 이름/별칭이 줄 안에 들어 있고(닉네임에 회사·직함이 붙어도 인식),
+      // 그 줄에서 뽑히는 이름이 1개 이하일 때만. 이름이 여럿이면 명단 줄로 보고 이름을 살린다.
+      if (found.length <= 1) {
+        const hit = keys.find(k => compact.includes(k.replace(/\s+/g, "")) && !opened.has(map.get(k)));
+        if (hit) {
+          const tid = map.get(hit);
+          opened.add(tid);
+          cur = emptyGroup(tid, line);
+          groups.push(cur);
+          return;
+        }
+      }
+      if (/[0-9０-９]/.test(line)) return;
       if (!found.length) return;
       if (!cur) { cur = emptyGroup("", "팀 미지정"); groups.push(cur); }
       found.forEach(n => { if (!cur.names.includes(n)) cur.names.push(n); });
@@ -914,7 +937,7 @@ export default function App() {
               <div style={c.ct}>👥 팀 관리 (반장 → 팀명·직종)</div>
               <div style={{ fontSize:12, color:"#888", lineHeight:1.6, marginBottom:10 }}>
                 카톡에서 명단을 올리는 반장 이름과 그 팀의 직종을 등록해 두면, 명단을 붙여넣을 때 직종이 자동으로 채워집니다.
-                카톡 닉네임이 실명과 다르면 <b>별칭</b> 칸에 닉네임을 적어 두세요. (여러 개는 쉼표로 구분)
+                카톡 닉네임이 실명과 다르면 <b>별칭</b> 칸에 닉네임 중 <b>고유한 부분만</b> 적어 두세요. 예를 들어 닉네임이 "오산 롯데 비계 배팀장"이면 별칭에 <b>배팀장</b>만 넣으면 됩니다. (여러 개는 쉼표로 구분)
               </div>
               {teams.map(t => (
                 <div key={t.id} style={c.rw}>

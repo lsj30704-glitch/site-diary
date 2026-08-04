@@ -28,14 +28,28 @@ const saveRosterMeta = m => { try { localStorage.setItem(ROSTER_META_KEY, JSON.s
 
 // ── 팀 마스터: 반장(카톡 보낸사람) → 팀명·직종 매핑 ──
 const DEFAULT_TEAMS = [
-  { id: "t1", leader: "엄최림", alias: "최림", team: "석공2팀", job: "석공" },
-  { id: "t2", leader: "정연학", alias: "郑然学", team: "석공1팀", job: "석공" },
-  { id: "t3", leader: "배현호", alias: "배팀장", team: "비계팀", job: "비계" },
-  { id: "t4", leader: "유정민", alias: "", team: "코킹팀", job: "코킹" },
+  { id: "t1", leader: "엄최림", alias: "최림", team: "석공2팀", job: "석공",
+    members: ["김철","김철주","엄최림","김만주","김철기","김철군","김철홍"] },
+  { id: "t2", leader: "정연학", alias: "郑然学", team: "석공1팀", job: "석공",
+    members: ["최은주","김대현","이상규","권춘우","권춘산","정연학","김지남","이성근","박동환"] },
+  { id: "t3", leader: "배현호", alias: "배팀장", team: "비계팀", job: "비계",
+    members: ["배현호","김영호","강성구","김기홍","윤한영","남갑일","문철환","서우석","이환기","하태욱"] },
+  { id: "t4", leader: "유정민", alias: "", team: "코킹팀", job: "코킹",
+    members: ["김춘산"] },
 ];
+// 명단 텍스트(줄바꿈·쉼표 혼용) ↔ 배열 변환
+const membersToText = m => (m || []).join("\n");
+const textToMembers = t => {
+  const out = [];
+  String(t || "").split(/[\n,，、·]+/).forEach(x => {
+    const v = x.trim();
+    if (v && !out.includes(v)) out.push(v);
+  });
+  return out;
+};
 const loadTeams = () => { try { const t = JSON.parse(localStorage.getItem(TEAMS_KEY) || "null"); return (t && t.length) ? t : DEFAULT_TEAMS; } catch { return DEFAULT_TEAMS; } };
 const saveTeams = t => { try { localStorage.setItem(TEAMS_KEY, JSON.stringify(t)); } catch {} };
-const defaultTeamRow = () => ({ id: UID(), leader: "", alias: "", team: "", job: "" });
+const defaultTeamRow = () => ({ id: UID(), leader: "", alias: "", team: "", job: "", members: [] });
 
 // 카톡 등에서 복사한 텍스트 → 사람 이름만 추출
 // 규칙 1) 숫자가 들어간 줄은 통째로 제외 (예: "8월3일 출력 7명", "시스템비계10명", "101동설치및112동해체")
@@ -85,8 +99,10 @@ const defaultRows = () => PRESET.map(name => ({ id: UID(), name, workers:"", wor
 const defaultState = (site="") => ({ date: TODAY(), site, manager: lastManager(), weather:"", mainWork:"", special:"", rows: defaultRows() });
 
 const fmtDate = d => { const dt = new Date(d); return `${dt.getFullYear()} 년 ${String(dt.getMonth()+1).padStart(2,'0')} 월 ${String(dt.getDate()).padStart(2,'0')} 일`; };
-const defaultRosterRow = () => ({ id: UID(), no:"", job:"", team:"", name:"", am:"", pm:"", night:"", work:"", note:"" });
-const rTotal = r => { const n = v => parseFloat(v)||0; const t = n(r.am)+n(r.pm)+n(r.night); return t ? (Number.isInteger(t)?t:t.toFixed(1)) : ""; };
+const defaultRosterRow = () => ({ id: UID(), no:"", job:"", team:"", name:"", am:"1", pm:"1", night:"", work:"", note:"" });
+// 출력시간점검은 체크 방식. 값이 있으면 체크된 것으로 본다(기존에 저장된 "1"·"0.5" 데이터도 그대로 체크로 인식)
+const isOn = v => { const t = String(v == null ? "" : v).trim(); return t !== "" && t !== "0"; };
+const CHK = "V";
 
 // 미리보기용 핀치 줌/팬/더블탭 이미지 — 모바일 터치 기준 (touch-action:none)
 function ZoomableImage({ src }) {
@@ -185,6 +201,8 @@ export default function App() {
   const [exportMonthSel, setExportMonthSel] = useState("");
   const [teams, setTeams] = useState(() => loadTeams());
   const [bulk, setBulk] = useState(null); // 명단 일괄 입력 모달 상태
+  const [statMonth, setStatMonth] = useState("");
+  const [statOpen, setStatOpen] = useState("");
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
 
@@ -202,10 +220,53 @@ export default function App() {
     const active = state.rows.filter(r => r.name && parseInt(r.workers) > 0);
     if (!active.length) { alert("공정별 출력인원에 입력된 내용이 없습니다."); return; }
     const rows = [];
-    active.forEach(r => { const cnt = parseInt(r.workers)||0; for (let i=0;i<cnt;i++) rows.push({ id:UID(), no:"", job:r.name, team:"", name:"", am:"", pm:"", night:"", work:r.work||"", note:"" }); });
+    active.forEach(r => { const cnt = parseInt(r.workers)||0; for (let i=0;i<cnt;i++) rows.push({ id:UID(), no:"", job:r.name, team:"", name:"", am:"1", pm:"1", night:"", work:r.work||"", note:"" }); });
     setRoster(rows);
   };
   const clearRoster = () => { if (window.confirm("출력명부를 모두 지울까요?")) setRoster([defaultRosterRow()]); };
+
+  // ── 출역집계: 보관함에 저장된 일지를 공정 → 사람 순으로 집계 ──
+  const statMonths = useMemo(() => {
+    const set = new Set();
+    history.forEach(h => { const ym = String(h.date||"").slice(0,7); if (ym) set.add(ym); });
+    return [...set].sort().reverse();
+  }, [history]);
+
+  const stats = useMemo(() => {
+    const ym = statMonth || statMonths[0] || "";
+    const entries = history.filter(h => String(h.date||"").startsWith(ym));
+    const jobs = new Map();
+    entries.forEach(h => (h.roster||[]).forEach(r => {
+      const name = String(r.name||"").trim();
+      if (!name) return;
+      const job = String(r.job||"").trim() || "직종 미지정";
+      if (!jobs.has(job)) jobs.set(job, new Map());
+      const nm = jobs.get(job);
+      if (!nm.has(name)) nm.set(name, { name, team: String(r.team||"").trim(), days: new Set(), gongsu: 0, night: 0, recs: [] });
+      const e = nm.get(name);
+      if (!e.team && r.team) e.team = String(r.team).trim();
+      e.days.add(h.date);
+      e.gongsu += (isOn(r.am) ? 0.5 : 0) + (isOn(r.pm) ? 0.5 : 0);
+      if (isOn(r.night)) e.night += 1;
+      e.recs.push({ date: h.date, am: isOn(r.am), pm: isOn(r.pm), night: isOn(r.night), work: String(r.work||"") });
+    }));
+    const out = [];
+    for (const [job, nm] of jobs) {
+      const people = [...nm.values()]
+        .map(e => ({ ...e, days: e.days.size, recs: e.recs.sort((a,b) => String(a.date).localeCompare(String(b.date))) }))
+        .sort((a,b) => b.days - a.days || a.name.localeCompare(b.name));
+      out.push({
+        job, people,
+        days: people.reduce((a,x) => a + x.days, 0),
+        gongsu: people.reduce((a,x) => a + x.gongsu, 0),
+        night: people.reduce((a,x) => a + x.night, 0),
+      });
+    }
+    out.sort((a,b) => b.gongsu - a.gongsu);
+    return { ym, entries: entries.length, jobs: out };
+  }, [history, statMonth, statMonths]);
+
+  const fmtNum = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
 
   // ── 팀 마스터 관리 ──
   const updateTeam = (id, f, v) => setTeams(prev => prev.map(t => t.id===id ? { ...t, [f]:v } : t));
@@ -215,14 +276,15 @@ export default function App() {
   // 과거 출력명부에 등장한 적 있는 이름 = 기존 인력. 처음 보는 이름은 검수 화면에서 '신규'로 표시
   const knownNames = useMemo(() => {
     const set = new Set();
+    teams.forEach(t => (t.members||[]).forEach(n => { const v=String(n||"").trim(); if(v) set.add(v); }));
     history.forEach(h => (h.roster||[]).forEach(r => { const n=(r.name||"").trim(); if(n) set.add(n); }));
     roster.forEach(r => { const n=(r.name||"").trim(); if(n) set.add(n); });
     return set;
-  }, [history, roster]);
+  }, [teams, history, roster]);
 
   // ── 명단 일괄 입력 (붙여넣기 / 캡쳐 이미지) ──
-  const emptyGroup = (teamId="", sender="") => ({ id: UID(), teamId, sender, names: [], manual: "", tasks: [defaultTaskRow()] });
-  const openBulk = () => setBulk({ mode:"paste", text:"", groups:[], parsed:false, teamToNote:false, busy:false, err:"", raw:"" });
+  const emptyGroup = (teamId="", sender="") => ({ id: UID(), teamId, sender, names: [], manual: "", tasks: [defaultTaskRow()], am:true, pm:true, night:false });
+  const openBulk = () => setBulk({ mode:"paste", text:"", groups:[], parsed:false, teamToNote:false, busy:false, err:"", raw:"", pickTeam: teams[0]?.id || "", picked: [] });
   const teamById = id => teams.find(t => t.id === id) || null;
 
   // 반장 이름/별칭 → 팀 id 매핑표
@@ -285,6 +347,17 @@ export default function App() {
       found.forEach(n => { if (!cur.names.includes(n)) cur.names.push(n); });
     });
     return groups.filter(g => g.names.length);
+  };
+
+  // 설정에 등록된 팀 명단에서 직접 골라 묶음 만들기
+  const togglePick = n => setBulk(b => ({ ...b, picked: b.picked.includes(n) ? b.picked.filter(x => x!==n) : [...b.picked, n] }));
+  const pickAll = (all) => setBulk(b => ({ ...b, picked: all }));
+  const applyPick = () => {
+    if (!bulk.picked.length) { alert("고른 사람이 없습니다."); return; }
+    const t = teamById(bulk.pickTeam);
+    const g = emptyGroup(bulk.pickTeam, `${t?.team || "등록 명단"} (직접 선택)`);
+    g.names = [...bulk.picked];
+    setBulk(b => ({ ...b, groups: [...(b.groups||[]), g], parsed: true, picked: [], raw: "" }));
   };
 
   const doParse = (text) => {
@@ -356,7 +429,7 @@ export default function App() {
       const assign = assignOf(g);
       g.names.forEach((nm, i) => rows.push({
         id: UID(), no:"", job: (t?.job||"").trim(), team: (t?.team||"").trim(), name: nm,
-        am:"1", pm:"1", night:"",
+        am: g.am ? "1" : "", pm: g.pm ? "1" : "", night: g.night ? "1" : "",
         work: assign[i] || "",
         note: bulk.teamToNote ? (t?.team||"") : "",
       }));
@@ -370,8 +443,20 @@ export default function App() {
         return [...base, ...rows];
       });
     }
+    // 마스터에 없던 새 이름은 해당 팀 소속 인원으로 자동 등록 (직접 지우기 전까지 계속 누적)
+    const added = [];
+    setTeams(prev => prev.map(t => {
+      const g = gs.find(x => x.teamId === t.id);
+      if (!g) return t;
+      const cur = t.members || [];
+      const news = g.names.filter(n => !cur.includes(n));
+      if (!news.length) return t;
+      news.forEach(n => added.push(`${t.team || t.leader}: ${n}`));
+      return { ...t, members: [...cur, ...news] };
+    }));
     setBulk(null);
-    setSavedMsg(`${rows.length}명 출력명부에 입력됨!`); setTimeout(() => setSavedMsg(""), 2200);
+    setSavedMsg(added.length ? `${rows.length}명 입력 · 신규 ${added.length}명 명단 등록됨!` : `${rows.length}명 출력명부에 입력됨!`);
+    setTimeout(() => setSavedMsg(""), 2600);
   };
 
 
@@ -386,7 +471,7 @@ export default function App() {
     rs.forEach(r => {
       const job = (r.job||"").trim();
       if (!job) return;
-      if (!(r.name && r.name.trim()) && rTotal(r)==="") return;
+      if (!(r.name && r.name.trim()) && !isOn(r.am) && !isOn(r.pm) && !isOn(r.night)) return;
       if (!map.has(job)) map.set(job, { id:UID(), name:job, workers:0, work:r.work||"", note:"" });
       const e = map.get(job); e.workers += 1; if (!e.work && r.work) e.work = r.work;
     });
@@ -730,6 +815,7 @@ export default function App() {
         <div style={c.tabs}>
           <button style={c.tab(tab==="write")} onClick={() => setTab("write")}>✍️ 작성</button>
           <button style={c.tab(tab==="history")} onClick={() => setTab("history")}>📁 보관함({history.length})</button>
+          <button style={c.tab(tab==="stats")} onClick={() => setTab("stats")}>📊 출역집계</button>
           <button style={c.tab(tab==="settings")} onClick={() => setTab("settings")}>⚙️설정</button>
         </div>
 
@@ -776,10 +862,14 @@ export default function App() {
                       <button onClick={() => removeRosterRow(r.id)} style={c.del}>✕</button>
                     </div>
                     <div style={{ display:"flex", gap:6, marginBottom:6 }}>
-                      <input value={r.am} onChange={e => updateRosterRow(r.id,"am",e.target.value)} placeholder="오전" style={{ flex:1, textAlign:"center" }} />
-                      <input value={r.pm} onChange={e => updateRosterRow(r.id,"pm",e.target.value)} placeholder="오후" style={{ flex:1, textAlign:"center" }} />
-                      <input value={r.night} onChange={e => updateRosterRow(r.id,"night",e.target.value)} placeholder="야간" style={{ flex:1, textAlign:"center" }} />
-                      <span style={{ fontSize:13, color:"#6f42c1", fontWeight:600, width:30, textAlign:"center", alignSelf:"center" }}>{rTotal(r)}</span>
+                      {[["am","오전"],["pm","오후"],["night","야간"]].map(([f,lb]) => (
+                        <label key={f} style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:5, padding:"8px 0", fontSize:13,
+                          border:`1px solid ${isOn(r[f]) ? "#6f42c1" : "#ddd"}`, borderRadius:6, cursor:"pointer",
+                          background: isOn(r[f]) ? "#f3efff" : "#fff", color: isOn(r[f]) ? "#6f42c1" : "#888", fontWeight: isOn(r[f]) ? 600 : 400 }}>
+                          <input type="checkbox" checked={isOn(r[f])} onChange={e => updateRosterRow(r.id, f, e.target.checked ? "1" : "")} style={{ margin:0 }} />
+                          {lb}
+                        </label>
+                      ))}
                     </div>
                     <input value={r.work} onChange={e => updateRosterRow(r.id,"work",e.target.value)} placeholder="작업내용" style={{ marginBottom:6 }} />
                     <input value={r.note} onChange={e => updateRosterRow(r.id,"note",e.target.value)} placeholder="비고" />
@@ -919,6 +1009,75 @@ export default function App() {
             })}
           </>}
 
+          {tab==="stats" && <>
+            <div style={c.card}>
+              <div style={c.ct}>📊 출역집계 — 공정별 · 사람별</div>
+              {statMonths.length ? (<>
+                <label style={c.lbl}>집계 월</label>
+                <select style={{ ...c.ti, marginBottom:4 }} value={stats.ym} onChange={e => { setStatMonth(e.target.value); setStatOpen(""); }}>
+                  {statMonths.map(m => <option key={m} value={m}>{m.replace("-", "년 ")}월</option>)}
+                </select>
+                <div style={{ fontSize:12, color:"#888" }}>
+                  저장된 일지 {stats.entries}일 기준 · 오전+오후 = 1공수, 한쪽만 체크 = 0.5공수
+                </div>
+              </>) : (
+                <div style={{ fontSize:13, color:"#888", lineHeight:1.6 }}>
+                  아직 저장된 일지가 없습니다. 작성 탭에서 일지를 저장하면 이곳에 사람별 출역일수가 쌓입니다.
+                </div>
+              )}
+            </div>
+
+            {stats.jobs.map(j => (
+              <div key={j.job} style={c.card}>
+                <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:10, paddingBottom:8, borderBottom:"2px solid #1a73e8" }}>
+                  <span style={{ fontSize:15, fontWeight:700, color:"#1a73e8" }}>{j.job}</span>
+                  <span style={{ fontSize:12, color:"#888" }}>{j.people.length}명</span>
+                  <span style={{ marginLeft:"auto", fontSize:13, fontWeight:600, color:"#333" }}>
+                    총 {fmtNum(j.gongsu)}공수{j.night ? ` · 야간 ${j.night}` : ""}
+                  </span>
+                </div>
+                {j.people.map(pp => {
+                  const key = `${j.job}|${pp.name}`;
+                  const open = statOpen === key;
+                  return (
+                    <div key={key} style={{ borderBottom:"1px solid #f0f0f0" }}>
+                      <div onClick={() => setStatOpen(open ? "" : key)} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 2px", cursor:"pointer" }}>
+                        <span style={{ fontSize:14, fontWeight:600, width:70 }}>{pp.name}</span>
+                        <span style={{ fontSize:11, color:"#6f42c1", background:"#f3efff", padding:"2px 7px", borderRadius:10 }}>{pp.team || "-"}</span>
+                        <span style={{ marginLeft:"auto", fontSize:13, color:"#333" }}>
+                          <b style={{ color:"#1a73e8" }}>{pp.days}</b>일 · {fmtNum(pp.gongsu)}공수{pp.night ? ` · 야${pp.night}` : ""}
+                        </span>
+                        <span style={{ fontSize:11, color:"#bbb" }}>{open ? "▾" : "▸"}</span>
+                      </div>
+                      {open && (
+                        <div style={{ background:"#fafbff", borderRadius:6, padding:"6px 8px", marginBottom:8 }}>
+                          {pp.recs.map((rc, i) => (
+                            <div key={i} style={{ display:"flex", gap:8, fontSize:12, color:"#555", padding:"3px 0", borderBottom: i < pp.recs.length-1 ? "1px solid #eef0f7" : "none" }}>
+                              <span style={{ width:76, color:"#888" }}>{String(rc.date).slice(5)}</span>
+                              <span style={{ width:60, color:"#6f42c1" }}>{[rc.am&&"오전",rc.pm&&"오후",rc.night&&"야간"].filter(Boolean).join("·") || "-"}</span>
+                              <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{rc.work || "-"}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+
+            {statMonths.length > 0 && stats.jobs.length > 0 && (
+              <button style={c.btn("#1a73e8","#fff")} onClick={() => {
+                const lines = [`📊 ${stats.ym} 출역집계 (일지 ${stats.entries}일)`, "━━━━━━━━━━━━━━━━━━━━━━"];
+                stats.jobs.forEach(j => {
+                  lines.push(`【 ${j.job} 】 ${j.people.length}명 · 총 ${fmtNum(j.gongsu)}공수`);
+                  j.people.forEach(pp => lines.push(`  ${pp.name}${pp.team?`(${pp.team})`:""} ${pp.days}일 / ${fmtNum(pp.gongsu)}공수${pp.night?` / 야간 ${pp.night}`:""}`));
+                });
+                navigator.clipboard.writeText(lines.join("\n")).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+              }}>📋 집계 결과 복사하기</button>
+            )}
+          </>}
+
           {tab==="settings" && <>
             <div style={c.card}>
               <div style={c.ct}>🏗️ 현장 관리</div>
@@ -946,10 +1105,21 @@ export default function App() {
                     <input value={t.team} onChange={e => updateTeam(t.id,"team",e.target.value)} placeholder="팀명 (예: 석공2팀)" style={{ flex:1 }} />
                     <button onClick={() => removeTeam(t.id)} style={c.del}>✕</button>
                   </div>
-                  <div style={{ display:"flex", gap:6 }}>
-                    <input value={t.job} onChange={e => updateTeam(t.id,"job",e.target.value)} placeholder="직종 (예: 석공)" style={{ flex:1 }} />
-                    <input value={t.alias} onChange={e => updateTeam(t.id,"alias",e.target.value)} placeholder="카톡 별칭 (선택)" style={{ flex:1 }} />
+                  <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                    <input value={t.job} onChange={e => updateTeam(t.id,"job",e.target.value)} placeholder="직종 (예: 석공)" style={{ flex:1, minWidth:0 }} />
+                    <input value={t.alias} onChange={e => updateTeam(t.id,"alias",e.target.value)} placeholder="카톡 별칭 (선택)" style={{ flex:1, minWidth:0 }} />
                   </div>
+                  <label style={{ ...c.lbl, display:"flex", justifyContent:"space-between" }}>
+                    <span>소속 인원 (한 줄에 한 명, 쉼표도 가능)</span>
+                    <span style={{ color:"#6f42c1", fontWeight:600 }}>{(t.members||[]).length}명</span>
+                  </label>
+                  <textarea
+                    value={membersToText(t.members)}
+                    onChange={e => updateTeam(t.id, "members", textToMembers(e.target.value))}
+                    placeholder={"김철\n김철주\n엄최림"}
+                    rows={4}
+                    style={{ width:"100%", padding:"8px 10px", fontSize:13, border:"1px solid #ddd", borderRadius:6, fontFamily:"inherit", boxSizing:"border-box" }}
+                  />
                 </div>
               ))}
               <button style={c.sb("#f0f4ff","#6f42c1")} onClick={addTeam}>+ 팀 추가</button>
@@ -973,12 +1143,46 @@ export default function App() {
               </div>
 
               {!bulk.parsed && (<>
-                <div style={{ display:"flex", gap:6, marginBottom:12 }}>
-                  <button onClick={() => setBulk(b => ({ ...b, mode:"image" }))} style={{ ...c.sb(bulk.mode==="image"?"#1a73e8":"#f1f3f4", bulk.mode==="image"?"#fff":"#555"), padding:10, fontSize:13 }}>📷 캡쳐본 올리기</button>
-                  <button onClick={() => setBulk(b => ({ ...b, mode:"paste" }))} style={{ ...c.sb(bulk.mode==="paste"?"#1a73e8":"#f1f3f4", bulk.mode==="paste"?"#fff":"#555"), padding:10, fontSize:13 }}>📝 직접 붙여넣기</button>
+                <div style={{ display:"flex", gap:5, marginBottom:12 }}>
+                  <button onClick={() => setBulk(b => ({ ...b, mode:"pick" }))} style={{ ...c.sb(bulk.mode==="pick"?"#1a73e8":"#f1f3f4", bulk.mode==="pick"?"#fff":"#555"), padding:10, fontSize:12 }}>📋 등록 명단</button>
+                  <button onClick={() => setBulk(b => ({ ...b, mode:"paste" }))} style={{ ...c.sb(bulk.mode==="paste"?"#1a73e8":"#f1f3f4", bulk.mode==="paste"?"#fff":"#555"), padding:10, fontSize:12 }}>📝 붙여넣기</button>
+                  <button onClick={() => setBulk(b => ({ ...b, mode:"image" }))} style={{ ...c.sb(bulk.mode==="image"?"#1a73e8":"#f1f3f4", bulk.mode==="image"?"#fff":"#555"), padding:10, fontSize:12 }}>📷 캡쳐본</button>
                 </div>
 
-                {bulk.mode === "image" ? (<>
+                {bulk.mode === "pick" ? (() => {
+                  const pt = teamById(bulk.pickTeam);
+                  const list = (pt?.members || []);
+                  return (<>
+                    <div style={{ fontSize:12, color:"#888", lineHeight:1.6, marginBottom:8 }}>
+                      설정 탭에 등록해 둔 팀 명단에서 오늘 나온 사람만 눌러서 고르세요. 카톡을 안 봐도 됩니다.
+                    </div>
+                    <select style={{ ...c.ti, marginBottom:8 }} value={bulk.pickTeam} onChange={e => setBulk(b => ({ ...b, pickTeam:e.target.value, picked:[] }))}>
+                      {teams.map(x => <option key={x.id} value={x.id}>{x.team || x.leader || "(이름 없음)"} · {x.job || "직종 미입력"} · {(x.members||[]).length}명</option>)}
+                    </select>
+                    {list.length ? (<>
+                      <div style={c.sr}>
+                        <button style={{ ...c.sb("#f0f4ff","#6f42c1"), padding:8, fontSize:12 }} onClick={() => pickAll(list)}>전원 선택</button>
+                        <button style={{ ...c.sb("none","#888"), padding:8, fontSize:12 }} onClick={() => pickAll([])}>선택 해제</button>
+                      </div>
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
+                        {list.map(n => {
+                          const on = bulk.picked.includes(n);
+                          return (
+                            <button key={n} onClick={() => togglePick(n)} style={{ padding:"7px 12px", fontSize:13, borderRadius:16, cursor:"pointer",
+                              border:`1px solid ${on ? "#137333" : "#ddd"}`, background: on ? "#e6f4ea" : "#fff", color: on ? "#137333" : "#666", fontWeight: on ? 600 : 400 }}>
+                              {on ? "✓ " : ""}{n}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <button style={c.btn("#1a73e8","#fff", 8)} onClick={applyPick}>선택한 {bulk.picked.length}명 담기</button>
+                    </>) : (
+                      <div style={{ fontSize:13, color:"#b26a00", background:"#fff4e5", border:"1px solid #ffb74d", borderRadius:8, padding:"10px 12px" }}>
+                        이 팀에 등록된 인원이 없습니다. 설정 탭 → 팀 관리에서 소속 인원을 먼저 적어 주세요.
+                      </div>
+                    )}
+                  </>);
+                })() : bulk.mode === "image" ? (<>
                   <div style={{ fontSize:12, color:"#888", lineHeight:1.6, marginBottom:10 }}>
                     카톡 화면을 캡쳐한 사진을 그대로 올리세요. 글자를 읽어서 <b>보낸사람 이름으로 팀을 자동 구분</b>합니다.
                     여러 팀이 한 장에 같이 찍혀 있어도 됩니다. 설정 탭의 팀 관리에 등록된 반장 이름·별칭이 기준입니다.
@@ -1044,6 +1248,18 @@ export default function App() {
                         <button onClick={() => addGroupName(g.id)} style={{ padding:"8px 14px", background:"#1a73e8", color:"#fff", border:"none", borderRadius:8, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" }}>추가</button>
                       </div>
 
+                      <div style={{ fontSize:12, color:"#888", marginBottom:6 }}>출력시간점검</div>
+                      <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+                        {[["am","오전"],["pm","오후"],["night","야간"]].map(([f,lb]) => (
+                          <label key={f} style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:5, padding:"8px 0", fontSize:13,
+                            border:`1px solid ${g[f] ? "#6f42c1" : "#ddd"}`, borderRadius:6, cursor:"pointer",
+                            background: g[f] ? "#f3efff" : "#fff", color: g[f] ? "#6f42c1" : "#888", fontWeight: g[f] ? 600 : 400 }}>
+                            <input type="checkbox" checked={!!g[f]} onChange={e => updGroup(g.id, f, e.target.checked)} style={{ margin:0 }} />
+                            {lb}
+                          </label>
+                        ))}
+                      </div>
+
                       <div style={{ fontSize:12, color:"#888", marginBottom:6 }}>작업내용 배분 (위에서부터 순서대로)</div>
                       {(g.tasks||[]).map((tk, i) => (
                         <div key={tk.id} style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
@@ -1065,6 +1281,7 @@ export default function App() {
                                 <td style={{ padding:"5px 8px", color:"#999", width:22 }}>{i+1}</td>
                                 <td style={{ padding:"5px 8px", width:52 }}>{t?.job || "-"}</td>
                                 <td style={{ padding:"5px 8px", fontWeight:600, width:64 }}>{n}</td>
+                                <td style={{ padding:"5px 8px", color:"#6f42c1", width:58, fontSize:11 }}>{[g.am&&"오전",g.pm&&"오후",g.night&&"야간"].filter(Boolean).join("·") || "-"}</td>
                                 <td style={{ padding:"5px 8px", color:"#555" }}>{assign[i] || "-"}</td>
                               </tr>
                             ))}
@@ -1090,7 +1307,7 @@ export default function App() {
                   <button style={c.sb("#137333","#fff")} onClick={() => applyBulk("append")}>출력명부에 추가</button>
                   <button style={c.sb("none","#ea4335")} onClick={() => applyBulk("replace")}>전체 교체</button>
                 </div>
-                <button style={{ ...c.sb("none","#888"), width:"100%", marginTop:8 }} onClick={() => setBulk(b => ({ ...b, parsed:false, groups:[], err:"" }))}>← 다시 읽기</button>
+                <button style={{ ...c.sb("none","#888"), width:"100%", marginTop:8 }} onClick={() => setBulk(b => ({ ...b, parsed:false, groups:[], err:"", picked:[] }))}>← 처음으로</button>
 
                 {bulk.raw && (
                   <details style={{ marginTop:10 }}>
@@ -1252,7 +1469,7 @@ export default function App() {
               <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"16mm" }}>고유번호</td>
               <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"16mm" }}>직종</td>
               <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"18mm" }}>성명</td>
-              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1mm" }} colSpan={4}>출력시간점검</td>
+              <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1mm" }} colSpan={3}>출력시간점검</td>
               <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm" }}>작업내용</td>
               <td style={{ border:"1px solid #000", textAlign:"center", fontWeight:700, padding:"1.5mm", width:"14mm" }}>비고</td>
             </tr>
@@ -1264,7 +1481,6 @@ export default function App() {
               <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>오전</td>
               <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>오후</td>
               <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>야간</td>
-              <td style={{ border:"1px solid #000", textAlign:"center", fontSize:9, width:"9mm" }}>계</td>
               <td style={{ border:"1px solid #000" }}></td>
               <td style={{ border:"1px solid #000" }}></td>
             </tr>
@@ -1278,10 +1494,9 @@ export default function App() {
                   <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.no || ""}</td>
                   <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.job || ""}</td>
                   <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.name || ""}</td>
-                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.am || ""}</td>
-                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.pm || ""}</td>
-                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.night || ""}</td>
-                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r ? rTotal(r) : ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r && isOn(r.am) ? CHK : ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r && isOn(r.pm) ? CHK : ""}</td>
+                  <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r && isOn(r.night) ? CHK : ""}</td>
                   <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.work || ""}</td>
                   <td style={{ border:"1px solid #000", textAlign:"center", padding:"1.5mm" }}>{r?.note || ""}</td>
                 </tr>

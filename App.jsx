@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 const PRESET = ["석공", "비계", "코킹", "트러스"];
 const QUICK = ["양중", "철거", "미장", "도장", "배관", "전기"];
@@ -11,6 +11,7 @@ const MANAGER_KEY = "site_diary_last_manager";
 const ROSTER_KEY = "site_diary_roster_v1";
 const ROSTER_META_KEY = "site_diary_roster_meta_v1";
 const ROSTER_PAD = 20;
+const TEAMS_KEY = "site_diary_teams_v1";
 
 const DEFAULT_SITES = ["롯데건설 오산 양산동 공동주택공사"];
 const lastManager = () => localStorage.getItem(MANAGER_KEY) || "이상준";
@@ -24,6 +25,39 @@ const loadRoster = () => { try { return JSON.parse(localStorage.getItem(ROSTER_K
 const saveRoster = l => { try { localStorage.setItem(ROSTER_KEY, JSON.stringify(l)); } catch {} };
 const loadRosterMeta = () => { try { return JSON.parse(localStorage.getItem(ROSTER_META_KEY) || "null") || { company:"은진산업 주식회사", workType:"석공", siteName:"오산 롯데 지역주택조합" }; } catch { return { company:"은진산업 주식회사", workType:"석공", siteName:"오산 롯데 지역주택조합" }; } };
 const saveRosterMeta = m => { try { localStorage.setItem(ROSTER_META_KEY, JSON.stringify(m)); } catch {} };
+
+// ── 팀 마스터: 반장(카톡 보낸사람) → 팀명·직종 매핑 ──
+const DEFAULT_TEAMS = [
+  { id: "t1", leader: "엄최림", alias: "최림", team: "석공2팀", job: "석공" },
+  { id: "t2", leader: "정연학", alias: "郑然学", team: "석공1팀", job: "석공" },
+  { id: "t3", leader: "배현호", alias: "", team: "비계팀", job: "비계" },
+];
+const loadTeams = () => { try { const t = JSON.parse(localStorage.getItem(TEAMS_KEY) || "null"); return (t && t.length) ? t : DEFAULT_TEAMS; } catch { return DEFAULT_TEAMS; } };
+const saveTeams = t => { try { localStorage.setItem(TEAMS_KEY, JSON.stringify(t)); } catch {} };
+const defaultTeamRow = () => ({ id: UID(), leader: "", alias: "", team: "", job: "" });
+
+// 카톡 등에서 복사한 텍스트 → 사람 이름만 추출
+// 규칙 1) 숫자가 들어간 줄은 통째로 제외 (예: "8월3일 출력 7명", "시스템비계10명", "101동설치및112동해체")
+// 규칙 2) 나머지 줄을 쉼표·마침표·가운데점·공백 등으로 쪼개 한글 2~4자만 이름으로 인정
+// 규칙 3) 직종·사무용어 같은 비이름 단어는 제외
+const NAME_STOP = new Set(["출력","인원","명단","오전","오후","야간","주간","작업","내용","해체","설치","양중","비계","석공","코킹","트러스","미장","도장","배관","전기","철거","금일","오늘","내일","현장","공지","확인","팀장","반장","사장","소장","안녕","수고","시스템","메시지","사진","이모티콘","삭제","전체","합계","총원","기타","오전반","오후반"]);
+const parseNames = (text) => {
+  const out = [];
+  (text || "").split(/\r?\n/).forEach(rawLine => {
+    const line = rawLine.trim();
+    if (!line) return;
+    if (/[0-9０-９]/.test(line)) return;
+    if (/^(메시지|사진|동영상|이모티콘|삭제|보이스톡)/.test(line)) return;
+    line.split(/[\s,.\/·、|\\:;~\-—+()\[\]{}<>"'“”]+/).forEach(tok => {
+      const t = tok.trim();
+      if (!/^[가-힣]{2,4}$/.test(t)) return;
+      if (NAME_STOP.has(t)) return;
+      if (!out.includes(t)) out.push(t);
+    });
+  });
+  return out;
+};
+const defaultTaskRow = () => ({ id: UID(), work: "", count: "" });
 
 // 결과물(이미지 PNG / PDF) 보관 — 용량 큰 바이너리는 localStorage(약 5MB) 대신 IndexedDB에 Blob으로 저장
 const IDB_NAME = "site_diary_files_v1";
@@ -48,7 +82,7 @@ const defaultRows = () => PRESET.map(name => ({ id: UID(), name, workers:"", wor
 const defaultState = (site="") => ({ date: TODAY(), site, manager: lastManager(), weather:"", mainWork:"", special:"", rows: defaultRows() });
 
 const fmtDate = d => { const dt = new Date(d); return `${dt.getFullYear()} 년 ${String(dt.getMonth()+1).padStart(2,'0')} 월 ${String(dt.getDate()).padStart(2,'0')} 일`; };
-const defaultRosterRow = () => ({ id: UID(), no:"", job:"", name:"", am:"", pm:"", night:"", work:"", note:"" });
+const defaultRosterRow = () => ({ id: UID(), no:"", job:"", team:"", name:"", am:"", pm:"", night:"", work:"", note:"" });
 const rTotal = r => { const n = v => parseFloat(v)||0; const t = n(r.am)+n(r.pm)+n(r.night); return t ? (Number.isInteger(t)?t:t.toFixed(1)) : ""; };
 
 // 미리보기용 핀치 줌/팬/더블탭 이미지 — 모바일 터치 기준 (touch-action:none)
@@ -146,6 +180,8 @@ export default function App() {
   const [preview, setPreview] = useState(null);
   const [shareView, setShareView] = useState(null);
   const [exportMonthSel, setExportMonthSel] = useState("");
+  const [teams, setTeams] = useState(() => loadTeams());
+  const [bulk, setBulk] = useState(null); // 명단 일괄 입력 모달 상태
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
 
@@ -163,14 +199,78 @@ export default function App() {
     const active = state.rows.filter(r => r.name && parseInt(r.workers) > 0);
     if (!active.length) { alert("공정별 출력인원에 입력된 내용이 없습니다."); return; }
     const rows = [];
-    active.forEach(r => { const cnt = parseInt(r.workers)||0; for (let i=0;i<cnt;i++) rows.push({ id:UID(), no:"", job:r.name, name:"", am:"", pm:"", night:"", work:r.work||"", note:"" }); });
+    active.forEach(r => { const cnt = parseInt(r.workers)||0; for (let i=0;i<cnt;i++) rows.push({ id:UID(), no:"", job:r.name, team:"", name:"", am:"", pm:"", night:"", work:r.work||"", note:"" }); });
     setRoster(rows);
   };
   const clearRoster = () => { if (window.confirm("출력명부를 모두 지울까요?")) setRoster([defaultRosterRow()]); };
 
+  // ── 팀 마스터 관리 ──
+  const updateTeam = (id, f, v) => setTeams(prev => prev.map(t => t.id===id ? { ...t, [f]:v } : t));
+  const addTeam = () => setTeams(prev => [...prev, defaultTeamRow()]);
+  const removeTeam = id => setTeams(prev => prev.filter(t => t.id!==id));
+
+  // 과거 출력명부에 등장한 적 있는 이름 = 기존 인력. 처음 보는 이름은 검수 화면에서 '신규'로 표시
+  const knownNames = useMemo(() => {
+    const set = new Set();
+    history.forEach(h => (h.roster||[]).forEach(r => { const n=(r.name||"").trim(); if(n) set.add(n); }));
+    roster.forEach(r => { const n=(r.name||"").trim(); if(n) set.add(n); });
+    return set;
+  }, [history, roster]);
+
+  // ── 명단 일괄 입력 ──
+  const openBulk = () => setBulk({ teamId: teams[0]?.id || "", text: "", names: [], manual: "", tasks: [defaultTaskRow()], teamToNote: false, parsed: false });
+  const bulkTeam = () => teams.find(t => t.id === bulk?.teamId) || null;
+  const doParse = () => {
+    const found = parseNames(bulk.text);
+    if (!found.length) { alert("이름을 찾지 못했습니다.\n카톡에서 메시지를 길게 눌러 '복사'한 뒤 붙여넣어 주세요."); return; }
+    setBulk(b => ({ ...b, names: found, parsed: true, tasks: b.tasks.length ? b.tasks : [defaultTaskRow()] }));
+  };
+  const removeBulkName = n => setBulk(b => ({ ...b, names: b.names.filter(x => x!==n) }));
+  const addBulkName = () => {
+    const n = (bulk.manual||"").trim();
+    if (!n) return;
+    if (bulk.names.includes(n)) { setBulk(b => ({ ...b, manual:"" })); return; }
+    setBulk(b => ({ ...b, names:[...b.names, n], manual:"" }));
+  };
+  const updateTask = (id, f, v) => setBulk(b => ({ ...b, tasks: b.tasks.map(t => t.id===id ? { ...t, [f]:v } : t) }));
+  const addTask = () => setBulk(b => ({ ...b, tasks:[...b.tasks, defaultTaskRow()] }));
+  const removeTask = id => setBulk(b => ({ ...b, tasks: b.tasks.filter(t => t.id!==id) }));
+  // 작업내용을 인원수만큼 순서대로 배분. 배분 안 된 나머지는 마지막 작업내용을 따름
+  const bulkAssign = () => {
+    if (!bulk) return [];
+    const res = []; let i = 0;
+    bulk.tasks.forEach(t => { const n = parseInt(t.count)||0; for (let k=0; k<n && i<bulk.names.length; k++, i++) res.push(t.work||""); });
+    const last = bulk.tasks.length ? (bulk.tasks[bulk.tasks.length-1].work||"") : "";
+    while (res.length < bulk.names.length) res.push(last);
+    return res;
+  };
+  const applyBulk = (mode) => {
+    const t = bulkTeam();
+    if (!bulk.names.length) { alert("추가할 이름이 없습니다."); return; }
+    const assign = bulkAssign();
+    const rows = bulk.names.map((nm, i) => ({
+      id: UID(), no:"", job: (t?.job||"").trim(), team: (t?.team||"").trim(), name: nm,
+      am:"1", pm:"1", night:"",
+      work: assign[i] || "",
+      note: bulk.teamToNote ? (t?.team||"") : "",
+    }));
+    if (mode === "replace") {
+      if (!window.confirm("기존 출력명부를 지우고 이 명단으로 교체할까요?")) return;
+      setRoster(rows);
+    } else {
+      setRoster(prev => {
+        const base = prev.filter(r => (r.name||"").trim() || (r.job||"").trim() || (r.work||"").trim());
+        return [...base, ...rows];
+      });
+    }
+    setBulk(null);
+    setSavedMsg(`${rows.length}명 출력명부에 입력됨!`); setTimeout(() => setSavedMsg(""), 2200);
+  };
+
   useEffect(() => { save(state); if (state.manager) localStorage.setItem(MANAGER_KEY, state.manager); }, [state]);
   useEffect(() => { saveRoster(roster); }, [roster]);
   useEffect(() => { saveRosterMeta(rosterMeta); }, [rosterMeta]);
+  useEffect(() => { saveTeams(teams); }, [teams]);
 
   // 출력명부(직종·인원)를 자동 집계해 '공정별 출력인원'을 채움 — 출력명부가 기준
   const aggregateRows = rs => {
@@ -396,30 +496,63 @@ export default function App() {
   // 안전교육일지 PNG 저장 — 출력명부와 동일한 미리보기+갤러리저장 흐름(서식·기존 PDF 미변경)
   const handleDownloadTbmImage = () => captureToPreview(tbmPrintRef.current, `안전교육일지_${state.date}.png`);
 
-  // 출력명부(작업내용·비고)에서 'N동'을 자동 추출해 직종→동별 인원으로 집계
-  const dongLines = (rosterArr) => {
-    const groups = new Map();
+  // 출력명부를 팀(없으면 직종) → 동별로 집계. 작업내용·비고에서 'N동'을 자동 추출
+  const teamStats = (rosterArr) => {
+    const groups = new Map(); // 팀명 → { job, dongs: Map(동 → {cnt, works:Set}) }
     (rosterArr || []).forEach(r => {
       const job = (r.job || "").trim();
-      if (!job) return;
+      const team = (r.team || "").trim() || job;
+      if (!team) return;
       const m = `${r.work||""} ${r.note||""}`.match(/(\d+)\s*동/);
       const dong = m ? `${m[1]}동` : "동미상";
-      if (!groups.has(job)) groups.set(job, new Map());
-      const dm = groups.get(job);
-      dm.set(dong, (dm.get(dong) || 0) + 1);
+      if (!groups.has(team)) groups.set(team, { job, dongs: new Map() });
+      const g = groups.get(team);
+      if (!g.dongs.has(dong)) g.dongs.set(dong, { cnt: 0, works: new Set() });
+      const d = g.dongs.get(dong);
+      d.cnt += 1;
+      // 작업내용 앞의 'N동'은 이미 동 이름으로 표시되므로 중복 제거 (예: "104동 외벽 석재 설치" → "외벽 석재 설치")
+      const w = (r.work || "").trim().replace(/^\s*\d+\s*동\s*/, "").trim();
+      if (w) d.works.add(w);
     });
-    const lines = []; let total = 0;
-    for (const [job, dm] of groups) {
-      lines.push(job);
-      const ents = [...dm.entries()].sort((a,b) => a[0]==="동미상" ? 1 : b[0]==="동미상" ? -1 : parseInt(a[0])-parseInt(b[0]));
-      ents.forEach(([dong,cnt]) => { lines.push(`${dong} ${cnt}명`); total += cnt; });
+    const sortDong = (a, b) => a[0]==="동미상" ? 1 : b[0]==="동미상" ? -1 : parseInt(a[0]) - parseInt(b[0]);
+    const out = [];
+    for (const [team, g] of groups) {
+      const ents = [...g.dongs.entries()].sort(sortDong);
+      const sum = ents.reduce((s, [,d]) => s + d.cnt, 0);
+      out.push({ team, job: g.job, total: sum, dongs: ents.map(([dong, d]) => ({ dong, cnt: d.cnt, works: [...d.works] })) });
     }
+    return out;
+  };
+
+  // 밴드/카톡 공유용 — 팀별 총원 + 동별 분배
+  const dongLines = (rosterArr) => {
+    const stats = teamStats(rosterArr);
+    const lines = []; let total = 0;
+    stats.forEach(st => {
+      lines.push(`▪ ${st.team} 총 ${st.total}명`);
+      st.dongs.forEach(d => { lines.push(`   ㆍ${d.dong} ${d.cnt}명${d.works.length ? ` (${d.works.join(", ")})` : ""}`); });
+      total += st.total;
+    });
     return { lines, total };
+  };
+
+  // 주요 업무란 자동 작성 — 팀별 한 줄 요약
+  const buildMainWork = (rosterArr) => teamStats(rosterArr).map(st => {
+    const parts = st.dongs.map(d => `${d.dong} ${d.cnt}명${d.works.length ? `(${d.works.join(" / ")})` : ""}`);
+    return `${st.team} ${st.total}명 · ${parts.join(" · ")}`;
+  }).join("\n");
+
+  const fillMainWork = () => {
+    const txt = buildMainWork(roster);
+    if (!txt) { alert("출력명부에 입력된 인원이 없습니다."); return; }
+    if (state.mainWork.trim() && !window.confirm("주요 업무란의 기존 내용을 지우고 새로 작성할까요?")) return;
+    set("mainWork", txt);
+    setSavedMsg("주요 업무 자동 작성됨!"); setTimeout(() => setSavedMsg(""), 2000);
   };
   const shareTextFrom = (e) => {
     const { lines, total } = dongLines(e.roster);
     const body = lines.length
-      ? [`【 공정·동별 출력인원 】`, ...lines, `▶ 합계: 총 ${total}명`]
+      ? [`【 팀·동별 출력인원 】`, ...lines, `▶ 합계: 총 ${total}명`]
       : [`【 공정별 출력인원 】`, ...(e.rows||[]).filter(r => r.name).map(r => `▪ ${r.name}: ${r.workers||0}명${r.work?` / ${r.work}`:""}${r.note?` (${r.note})`:""}`), `▶ 합계: 총 ${(e.rows||[]).reduce((s,r)=>s+(parseInt(r.workers)||0),0)}명`];
     return [
       `📋 일일 현장업무일지`, `━━━━━━━━━━━━━━━━━━━━━━`,
@@ -519,12 +652,19 @@ export default function App() {
                 <label style={c.lbl}>현장명</label>
                 <input style={c.ti} value={rosterMeta.siteName} onChange={e => setRM("siteName", e.target.value)} />
 
+                <button style={{ ...c.btn("#e6f4ea","#137333", 12), border:"1px solid #137333" }} onClick={openBulk}>📥 카톡 명단 붙여넣기 → 일괄 입력</button>
+
                 {roster.map((r, idx) => (
                   <div key={r.id} style={c.rw}>
                     <div style={c.rt}>
                       <span style={{ fontSize:12, color:"#888", width:18 }}>{idx+1}</span>
-                      <input value={r.job} onChange={e => updateRosterRow(r.id,"job",e.target.value)} placeholder="직종" style={{ flex:1 }} />
-                      <input value={r.name} onChange={e => updateRosterRow(r.id,"name",e.target.value)} placeholder="성명" style={{ flex:1 }} />
+                      <input value={r.job} onChange={e => updateRosterRow(r.id,"job",e.target.value)} placeholder="직종" style={{ flex:1, minWidth:0 }} />
+                      <select value={r.team || ""} onChange={e => updateRosterRow(r.id,"team",e.target.value)} style={{ width:92, flexShrink:0, padding:"8px 4px", fontSize:12, border:"1px solid #ddd", borderRadius:6, background:"#fff" }}>
+                        <option value="">팀 없음</option>
+                        {teams.map(t => t.team ? <option key={t.id} value={t.team}>{t.team}</option> : null)}
+                        {r.team && !teams.some(t => t.team === r.team) && <option value={r.team}>{r.team}</option>}
+                      </select>
+                      <input value={r.name} onChange={e => updateRosterRow(r.id,"name",e.target.value)} placeholder="성명" style={{ flex:1, minWidth:0 }} />
                       <button onClick={() => removeRosterRow(r.id)} style={c.del}>✕</button>
                     </div>
                     <div style={{ display:"flex", gap:6, marginBottom:6 }}>
@@ -550,7 +690,8 @@ export default function App() {
 
             <div style={c.card}>
               <div style={c.ct}>📌 주요 업무</div>
-              <textarea value={state.mainWork} onChange={e => set("mainWork", e.target.value)} placeholder="오늘의 주요 업무 내용" rows={4} />
+              <button style={{ ...c.btn("#e6f4ea","#137333", 8), border:"1px solid #137333" }} onClick={fillMainWork}>🔄 출력명부에서 자동 작성 (팀·동별)</button>
+              <textarea value={state.mainWork} onChange={e => set("mainWork", e.target.value)} placeholder="오늘의 주요 업무 내용" rows={5} />
             </div>
 
             <div style={c.card}>
@@ -685,12 +826,136 @@ export default function App() {
               </div>
             </div>
             <div style={c.card}>
+              <div style={c.ct}>👥 팀 관리 (반장 → 팀명·직종)</div>
+              <div style={{ fontSize:12, color:"#888", lineHeight:1.6, marginBottom:10 }}>
+                카톡에서 명단을 올리는 반장 이름과 그 팀의 직종을 등록해 두면, 명단을 붙여넣을 때 직종이 자동으로 채워집니다.
+                카톡 닉네임이 실명과 다르면 <b>별칭</b> 칸에 닉네임을 적어 두세요. (여러 개는 쉼표로 구분)
+              </div>
+              {teams.map(t => (
+                <div key={t.id} style={c.rw}>
+                  <div style={c.rt}>
+                    <input value={t.leader} onChange={e => updateTeam(t.id,"leader",e.target.value)} placeholder="반장 이름" style={{ flex:1 }} />
+                    <input value={t.team} onChange={e => updateTeam(t.id,"team",e.target.value)} placeholder="팀명 (예: 석공2팀)" style={{ flex:1 }} />
+                    <button onClick={() => removeTeam(t.id)} style={c.del}>✕</button>
+                  </div>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <input value={t.job} onChange={e => updateTeam(t.id,"job",e.target.value)} placeholder="직종 (예: 석공)" style={{ flex:1 }} />
+                    <input value={t.alias} onChange={e => updateTeam(t.id,"alias",e.target.value)} placeholder="카톡 별칭 (선택)" style={{ flex:1 }} />
+                  </div>
+                </div>
+              ))}
+              <button style={c.sb("#f0f4ff","#6f42c1")} onClick={addTeam}>+ 팀 추가</button>
+            </div>
+
+            <div style={c.card}>
               <div style={c.ct}>👷 기본 설정</div>
               <label style={c.lbl}>현장소장 이름</label>
               <input value={state.manager} onChange={e => set("manager", e.target.value)} placeholder="현장소장 이름" />
             </div>
           </>}
         </div>
+
+        {/* ── 명단 일괄 입력 모달 ── */}
+        {bulk && (() => {
+          const t = bulkTeam();
+          const assign = bulkAssign();
+          const planned = bulk.tasks.reduce((a,x) => a + (parseInt(x.count)||0), 0);
+          const rest = Math.max(0, bulk.names.length - planned);
+          return (
+            <div onClick={() => setBulk(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.6)", zIndex:210, display:"flex", alignItems:"center", justifyContent:"center", padding:12 }}>
+              <div onClick={e => e.stopPropagation()} style={{ background:"#fff", borderRadius:12, width:"100%", maxWidth:460, maxHeight:"92vh", overflowY:"auto", padding:16, boxSizing:"border-box" }}>
+                <div style={{ ...c.ct, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span>📥 명단 일괄 입력</span>
+                  <button onClick={() => setBulk(null)} style={c.del}>✕</button>
+                </div>
+
+                {/* 1) 팀 선택 */}
+                <label style={c.lbl}>1. 팀 선택 (직종이 자동으로 채워집니다)</label>
+                {teams.length ? (
+                  <select style={{ ...c.ti, marginBottom:4 }} value={bulk.teamId} onChange={e => setBulk(b => ({ ...b, teamId:e.target.value }))}>
+                    {teams.map(x => <option key={x.id} value={x.id}>{x.leader || "(반장 미입력)"} · {x.team || "팀명 미입력"} · {x.job || "직종 미입력"}</option>)}
+                  </select>
+                ) : (
+                  <div style={{ fontSize:13, color:"#ea4335", marginBottom:8 }}>설정 탭에서 팀을 먼저 등록해 주세요.</div>
+                )}
+                <div style={{ fontSize:12, color:"#666", marginBottom:12 }}>→ 직종 <b>{t?.job || "-"}</b> / 팀 <b>{t?.team || "-"}</b></div>
+
+                {/* 2) 붙여넣기 */}
+                <label style={c.lbl}>2. 카톡에서 복사한 명단 붙여넣기</label>
+                <textarea
+                  value={bulk.text}
+                  onChange={e => setBulk(b => ({ ...b, text:e.target.value }))}
+                  placeholder={"카톡 메시지를 길게 눌러 '복사' 후 여기에 붙여넣기\n\n예)\n8월3일 출력 7명\n김철\n김철주\n엄최림"}
+                  style={{ width:"100%", minHeight:110, padding:10, fontSize:13, border:"1px solid #ddd", borderRadius:8, fontFamily:"inherit", boxSizing:"border-box", marginBottom:8 }}
+                />
+                <button style={c.btn("#1a73e8","#fff", 12)} onClick={doParse}>🔍 이름 뽑아내기</button>
+
+                {bulk.parsed && (<>
+                  {/* 3) 검수 */}
+                  <label style={c.lbl}>3. 인식 결과 확인 · 수정 ({bulk.names.length}명)</label>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
+                    {bulk.names.map(n => {
+                      const isNew = knownNames.size > 0 && !knownNames.has(n);
+                      return (
+                        <span key={n} style={{ display:"inline-flex", alignItems:"center", gap:4, padding:"5px 8px", borderRadius:16, fontSize:13,
+                          background: isNew ? "#fff4e5" : "#f0f4ff", color: isNew ? "#b26a00" : "#1a3a8a", border: `1px solid ${isNew ? "#ffb74d" : "#c9d6ff"}` }}>
+                          {isNew && "✨"}{n}
+                          <button onClick={() => removeBulkName(n)} style={{ background:"none", border:"none", color:"#999", fontSize:14, cursor:"pointer", padding:0, lineHeight:1 }}>✕</button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  {knownNames.size > 0 && <div style={{ fontSize:11, color:"#b26a00", marginBottom:8 }}>✨ = 이전 명부에 없던 새 이름입니다. 오타가 아닌지 확인해 주세요.</div>}
+                  <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+                    <input value={bulk.manual} onChange={e => setBulk(b => ({ ...b, manual:e.target.value }))} onKeyDown={e => e.key==="Enter" && addBulkName()} placeholder="빠진 이름 직접 추가" style={{ flex:1 }} />
+                    <button onClick={addBulkName} style={{ padding:"8px 14px", background:"#1a73e8", color:"#fff", border:"none", borderRadius:8, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" }}>추가</button>
+                  </div>
+
+                  {/* 4) 작업 배분 */}
+                  <label style={c.lbl}>4. 작업내용 배분 (위에서부터 순서대로 나눠 들어갑니다)</label>
+                  {bulk.tasks.map((tk, i) => (
+                    <div key={tk.id} style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
+                      <input value={tk.work} onChange={e => updateTask(tk.id,"work",e.target.value)} placeholder={`작업내용 ${i+1} (예: 3동 외벽 석재 설치)`} style={{ flex:1 }} />
+                      <input value={tk.count} onChange={e => updateTask(tk.id,"count",e.target.value.replace(/[^0-9]/g,""))} placeholder="인원" inputMode="numeric" style={{ width:56, textAlign:"center" }} />
+                      <button onClick={() => removeTask(tk.id)} style={c.del}>✕</button>
+                    </div>
+                  ))}
+                  <button style={c.sb("#f0f4ff","#6f42c1")} onClick={addTask}>+ 작업 추가</button>
+                  <div style={{ fontSize:12, color: rest ? "#b26a00" : "#137333", margin:"10px 0 4px" }}>
+                    총 {bulk.names.length}명 중 {Math.min(planned, bulk.names.length)}명 배분됨{rest ? ` · 남은 ${rest}명은 마지막 작업내용으로 들어갑니다` : " · 전원 배분 완료"}
+                  </div>
+
+                  {/* 미리보기 */}
+                  <div style={{ border:"1px solid #e8e8e8", borderRadius:8, maxHeight:150, overflowY:"auto", marginBottom:10 }}>
+                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                      <tbody>
+                        {bulk.names.map((n, i) => (
+                          <tr key={n} style={{ borderBottom:"1px solid #f2f2f2" }}>
+                            <td style={{ padding:"5px 8px", color:"#999", width:22 }}>{i+1}</td>
+                            <td style={{ padding:"5px 8px", width:60 }}>{t?.job || "-"}</td>
+                            <td style={{ padding:"5px 8px", fontWeight:600 }}>{n}</td>
+                            <td style={{ padding:"5px 8px", color:"#555" }}>{assign[i] || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"#555", marginBottom:12, cursor:"pointer" }}>
+                    <input type="checkbox" checked={bulk.teamToNote} onChange={e => setBulk(b => ({ ...b, teamToNote:e.target.checked }))} />
+                    비고란에 팀명({t?.team || "-"}) 표시
+                  </label>
+
+                  <div style={c.sr}>
+                    <button style={c.sb("#137333","#fff")} onClick={() => applyBulk("append")}>출력명부에 추가</button>
+                    <button style={c.sb("none","#ea4335")} onClick={() => applyBulk("replace")}>전체 교체</button>
+                  </div>
+                </>)}
+              </div>
+            </div>
+          );
+        })()}
+
         {(savedMsg||copied) && <div style={c.msg}>{savedMsg||"복사됨!"}</div>}
 
         {preview && (

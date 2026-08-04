@@ -235,31 +235,46 @@ export default function App() {
   const stats = useMemo(() => {
     const ym = statMonth || statMonths[0] || "";
     const entries = history.filter(h => String(h.date||"").startsWith(ym));
+    // 공정(직종) → 팀 → 사람 3단계로 집계. 같은 석공이라도 1팀·2팀은 따로 나온다.
     const jobs = new Map();
     entries.forEach(h => (h.roster||[]).forEach(r => {
       const name = String(r.name||"").trim();
       if (!name) return;
       const job = String(r.job||"").trim() || "직종 미지정";
+      const team = String(r.team||"").trim() || "팀 미지정";
       if (!jobs.has(job)) jobs.set(job, new Map());
-      const nm = jobs.get(job);
-      if (!nm.has(name)) nm.set(name, { name, team: String(r.team||"").trim(), days: new Set(), gongsu: 0, night: 0, recs: [] });
+      const tm = jobs.get(job);
+      if (!tm.has(team)) tm.set(team, new Map());
+      const nm = tm.get(team);
+      if (!nm.has(name)) nm.set(name, { name, team, days: new Set(), gongsu: 0, night: 0, recs: [] });
       const e = nm.get(name);
-      if (!e.team && r.team) e.team = String(r.team).trim();
       e.days.add(h.date);
       e.gongsu += (isOn(r.am) ? 0.5 : 0) + (isOn(r.pm) ? 0.5 : 0);
       if (isOn(r.night)) e.night += 1;
       e.recs.push({ date: h.date, am: isOn(r.am), pm: isOn(r.pm), night: isOn(r.night), work: String(r.work||"") });
     }));
+    const sum = (arr, f) => arr.reduce((a,x) => a + f(x), 0);
     const out = [];
-    for (const [job, nm] of jobs) {
-      const people = [...nm.values()]
-        .map(e => ({ ...e, days: e.days.size, recs: e.recs.sort((a,b) => String(a.date).localeCompare(String(b.date))) }))
-        .sort((a,b) => b.days - a.days || a.name.localeCompare(b.name));
+    for (const [job, tm] of jobs) {
+      const tlist = [];
+      for (const [team, nm] of tm) {
+        const people = [...nm.values()]
+          .map(e => ({ ...e, days: e.days.size, recs: e.recs.sort((a,b) => String(a.date).localeCompare(String(b.date))) }))
+          .sort((a,b) => b.days - a.days || a.name.localeCompare(b.name));
+        tlist.push({
+          team, people,
+          days: sum(people, x => x.days),
+          gongsu: sum(people, x => x.gongsu),
+          night: sum(people, x => x.night),
+        });
+      }
+      tlist.sort((a,b) => a.team === "팀 미지정" ? 1 : b.team === "팀 미지정" ? -1 : a.team.localeCompare(b.team));
       out.push({
-        job, people,
-        days: people.reduce((a,x) => a + x.days, 0),
-        gongsu: people.reduce((a,x) => a + x.gongsu, 0),
-        night: people.reduce((a,x) => a + x.night, 0),
+        job, teams: tlist,
+        people: sum(tlist, t => t.people.length),
+        days: sum(tlist, t => t.days),
+        gongsu: sum(tlist, t => t.gongsu),
+        night: sum(tlist, t => t.night),
       });
     }
     out.sort((a,b) => b.gongsu - a.gongsu);
@@ -1029,21 +1044,28 @@ export default function App() {
 
             {stats.jobs.map(j => (
               <div key={j.job} style={c.card}>
-                <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:10, paddingBottom:8, borderBottom:"2px solid #1a73e8" }}>
+                <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:4, paddingBottom:8, borderBottom:"2px solid #1a73e8" }}>
                   <span style={{ fontSize:15, fontWeight:700, color:"#1a73e8" }}>{j.job}</span>
-                  <span style={{ fontSize:12, color:"#888" }}>{j.people.length}명</span>
+                  <span style={{ fontSize:12, color:"#888" }}>{j.teams.length}개 팀 · {j.people}명</span>
                   <span style={{ marginLeft:"auto", fontSize:13, fontWeight:600, color:"#333" }}>
                     총 {fmtNum(j.gongsu)}공수{j.night ? ` · 야간 ${j.night}` : ""}
                   </span>
                 </div>
-                {j.people.map(pp => {
-                  const key = `${j.job}|${pp.name}`;
+                {j.teams.map(tg => (<div key={tg.team}>
+                <div style={{ display:"flex", alignItems:"baseline", gap:6, margin:"12px 0 2px", padding:"5px 8px", background:"#f3efff", borderRadius:6 }}>
+                  <span style={{ fontSize:13, fontWeight:600, color:"#6f42c1" }}>{tg.team}</span>
+                  <span style={{ fontSize:11, color:"#9b8bbd" }}>{tg.people.length}명</span>
+                  <span style={{ marginLeft:"auto", fontSize:12, fontWeight:600, color:"#6f42c1" }}>
+                    {fmtNum(tg.gongsu)}공수{tg.night ? ` · 야간 ${tg.night}` : ""}
+                  </span>
+                </div>
+                {tg.people.map(pp => {
+                  const key = `${j.job}|${tg.team}|${pp.name}`;
                   const open = statOpen === key;
                   return (
                     <div key={key} style={{ borderBottom:"1px solid #f0f0f0" }}>
                       <div onClick={() => setStatOpen(open ? "" : key)} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 2px", cursor:"pointer" }}>
-                        <span style={{ fontSize:14, fontWeight:600, width:70 }}>{pp.name}</span>
-                        <span style={{ fontSize:11, color:"#6f42c1", background:"#f3efff", padding:"2px 7px", borderRadius:10 }}>{pp.team || "-"}</span>
+                        <span style={{ fontSize:14, fontWeight:600 }}>{pp.name}</span>
                         <span style={{ marginLeft:"auto", fontSize:13, color:"#333" }}>
                           <b style={{ color:"#1a73e8" }}>{pp.days}</b>일 · {fmtNum(pp.gongsu)}공수{pp.night ? ` · 야${pp.night}` : ""}
                         </span>
@@ -1063,6 +1085,7 @@ export default function App() {
                     </div>
                   );
                 })}
+                </div>))}
               </div>
             ))}
 
@@ -1070,8 +1093,11 @@ export default function App() {
               <button style={c.btn("#1a73e8","#fff")} onClick={() => {
                 const lines = [`📊 ${stats.ym} 출역집계 (일지 ${stats.entries}일)`, "━━━━━━━━━━━━━━━━━━━━━━"];
                 stats.jobs.forEach(j => {
-                  lines.push(`【 ${j.job} 】 ${j.people.length}명 · 총 ${fmtNum(j.gongsu)}공수`);
-                  j.people.forEach(pp => lines.push(`  ${pp.name}${pp.team?`(${pp.team})`:""} ${pp.days}일 / ${fmtNum(pp.gongsu)}공수${pp.night?` / 야간 ${pp.night}`:""}`));
+                  lines.push(`【 ${j.job} 】 ${j.people}명 · 총 ${fmtNum(j.gongsu)}공수${j.night?` · 야간 ${j.night}`:""}`);
+                  j.teams.forEach(tg => {
+                    lines.push(` ▪ ${tg.team} ${tg.people.length}명 · ${fmtNum(tg.gongsu)}공수${tg.night?` · 야간 ${tg.night}`:""}`);
+                    tg.people.forEach(pp => lines.push(`    ${pp.name} ${pp.days}일 / ${fmtNum(pp.gongsu)}공수${pp.night?` / 야간 ${pp.night}`:""}`));
+                  });
                 });
                 navigator.clipboard.writeText(lines.join("\n")).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
               }}>📋 집계 결과 복사하기</button>

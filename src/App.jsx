@@ -38,10 +38,11 @@ const DEFAULT_TEAMS = [
     members: ["김춘산"] },
 ];
 // 명단 텍스트(줄바꿈·쉼표 혼용) ↔ 배열 변환
-const membersToText = m => (m || []).join("\n");
+const membersToText = m => (m || []).join(". ");
+// 모바일에서 줄바꿈이 잘 안 되므로 마침표를 기본 구분자로 사용. 쉼표·줄바꿈·공백도 함께 인정
 const textToMembers = t => {
   const out = [];
-  String(t || "").split(/[\n,，、·]+/).forEach(x => {
+  String(t || "").split(/[\n\r,，、·．.\/|;:\s]+/).forEach(x => {
     const v = x.trim();
     if (v && !out.includes(v)) out.push(v);
   });
@@ -203,6 +204,7 @@ export default function App() {
   const [bulk, setBulk] = useState(null); // 명단 일괄 입력 모달 상태
   const [statMonth, setStatMonth] = useState("");
   const [statOpen, setStatOpen] = useState("");
+  const [memberEdit, setMemberEdit] = useState({}); // 소속 인원 입력 중 원문 유지
   const rosterPrintRef = useRef();
   const tbmPrintRef = useRef();
 
@@ -1136,16 +1138,32 @@ export default function App() {
                     <input value={t.alias} onChange={e => updateTeam(t.id,"alias",e.target.value)} placeholder="카톡 별칭 (선택)" style={{ flex:1, minWidth:0 }} />
                   </div>
                   <label style={{ ...c.lbl, display:"flex", justifyContent:"space-between" }}>
-                    <span>소속 인원 (한 줄에 한 명, 쉼표도 가능)</span>
+                    <span>소속 인원 — 마침표(.)로 구분</span>
                     <span style={{ color:"#6f42c1", fontWeight:600 }}>{(t.members||[]).length}명</span>
                   </label>
                   <textarea
-                    value={membersToText(t.members)}
-                    onChange={e => updateTeam(t.id, "members", textToMembers(e.target.value))}
-                    placeholder={"김철\n김철주\n엄최림"}
-                    rows={4}
-                    style={{ width:"100%", padding:"8px 10px", fontSize:13, border:"1px solid #ddd", borderRadius:6, fontFamily:"inherit", boxSizing:"border-box" }}
+                    value={memberEdit[t.id] !== undefined ? memberEdit[t.id] : membersToText(t.members)}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setMemberEdit(prev => ({ ...prev, [t.id]: v }));
+                      updateTeam(t.id, "members", textToMembers(v));
+                    }}
+                    onBlur={() => setMemberEdit(prev => { const n = { ...prev }; delete n[t.id]; return n; })}
+                    placeholder={"김철. 김철주. 엄최림. 김만주"}
+                    rows={3}
+                    style={{ width:"100%", padding:"8px 10px", fontSize:13, lineHeight:1.6, border:"1px solid #ddd", borderRadius:6, fontFamily:"inherit", boxSizing:"border-box" }}
                   />
+                  {(t.members||[]).length > 0 && (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginTop:6 }}>
+                      {(t.members||[]).map(n => (
+                        <span key={n} style={{ display:"inline-flex", alignItems:"center", gap:3, padding:"3px 7px", borderRadius:12, fontSize:12, background:"#f0f4ff", color:"#1a3a8a", border:"1px solid #c9d6ff" }}>
+                          {n}
+                          <button onClick={() => updateTeam(t.id, "members", (t.members||[]).filter(x => x!==n))}
+                            style={{ background:"none", border:"none", color:"#999", fontSize:13, cursor:"pointer", padding:0, lineHeight:1 }}>✕</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
               <button style={c.sb("#f0f4ff","#6f42c1")} onClick={addTeam}>+ 팀 추가</button>
